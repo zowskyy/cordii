@@ -1,0 +1,101 @@
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from core.context import Context
+from core.registry import PluginRegistry
+from plugins.agent.loop import AgentLoop
+from plugins.core.event_logger import EventLogger
+from plugins.model.ollama import OllamaModel
+from plugins.tools.file import FileTools
+
+
+def _ollama_available():
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", 11434), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+REAL_MODEL = "qwen2.5-coder:1.5b"
+OLLAMA_URL = "http://127.0.0.1:11434"
+
+
+@pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
+def test_chat_completion():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctx = Context(config={"workspace": str(Path(tmp) / "ws"), "model": REAL_MODEL, "ollama_url": OLLAMA_URL})
+        reg = PluginRegistry(ctx)
+        reg.register(EventLogger(Path(tmp) / "test.db"))
+        reg.register(OllamaModel(model=REAL_MODEL, base_url=OLLAMA_URL))
+        reg.register(FileTools(Path(tmp) / "ws"))
+        reg.register(AgentLoop(max_rounds=3))
+        reg.start_all()
+        try:
+            r = ctx.plugins["agent_loop"].run("Say hello")
+            assert isinstance(r, str) and len(r) > 0
+        finally:
+            reg.stop_all()
+
+
+@pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
+def test_tool_call_parsing():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctx = Context(config={"workspace": str(Path(tmp) / "ws"), "model": REAL_MODEL, "ollama_url": OLLAMA_URL})
+        reg = PluginRegistry(ctx)
+        reg.register(EventLogger(Path(tmp) / "test.db"))
+        reg.register(OllamaModel(model=REAL_MODEL, base_url=OLLAMA_URL))
+        reg.register(FileTools(Path(tmp) / "ws"))
+        reg.register(AgentLoop(max_rounds=3))
+        reg.start_all()
+        try:
+            r = ctx.plugins["agent_loop"].run("Create a file test.txt with content hello world")
+            assert isinstance(r, str) and len(r) > 0
+        finally:
+            reg.stop_all()
+
+
+@pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
+def test_agent_loop_with_file_tool():
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Path(tmp) / "ws"
+        ws.mkdir()
+        ctx = Context(config={"workspace": str(ws), "model": REAL_MODEL, "ollama_url": OLLAMA_URL})
+        reg = PluginRegistry(ctx)
+        reg.register(EventLogger(Path(tmp) / "test.db"))
+        reg.register(OllamaModel(model=REAL_MODEL, base_url=OLLAMA_URL))
+        reg.register(FileTools(ws))
+        reg.register(AgentLoop(max_rounds=3))
+        reg.start_all()
+        try:
+            r = ctx.plugins["agent_loop"].run("Create a file test.txt with content hello world")
+            assert isinstance(r, str) and len(r) > 0
+            f = ws / "test.txt"
+            if f.exists():
+                assert "hello" in f.read_text(encoding="utf-8").lower()
+        finally:
+            reg.stop_all()
+
+
+@pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
+def test_event_logging_with_real_model():
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Path(tmp) / "ws"
+        ws.mkdir()
+        ctx = Context(config={"workspace": str(ws), "model": REAL_MODEL, "ollama_url": OLLAMA_URL})
+        reg = PluginRegistry(ctx)
+        reg.register(EventLogger(Path(tmp) / "test.db"))
+        reg.register(OllamaModel(model=REAL_MODEL, base_url=OLLAMA_URL))
+        reg.register(FileTools(ws))
+        reg.register(AgentLoop(max_rounds=3))
+        reg.start_all()
+        try:
+            ctx.plugins["agent_loop"].run("Say hello")
+            events = ctx.plugins["event_log"].get_session_events(ctx.plugins["continuity"].session_id)
+            types = {e.type for e in events}
+            assert {"session.start", "user.message", "assistant.message"}.issubset(types)
+        finally:
+            reg.stop_all()

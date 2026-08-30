@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.pytest*/
+.pytest_*/
+*.pyc
+*.db
+*.db-journal
+.cache/*
+!.cache/.gitkeep
+continuity/*.db
+!continuity/.gitkeep
+workspace/*
+!workspace/.gitkeep
+benchmark_results.db
+benchmark_results.json
