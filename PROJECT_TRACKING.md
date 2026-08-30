@@ -8,7 +8,7 @@ Lite-first local agent for 1.5B models (qwen2.5-coder:1.5b). Pool philosophy: de
 - **Calibration separation** — model-specific numbers live only in `core/context.py` `MODEL_PRESETS`; invariant layers read via `calibration_from_context()` (AGENTS.md axiom: "Calibration separation").
 - **De-Kilo** — `.kilo/`, `kilo.json`, and the AGENTS.md Kilo section removed; methodology lives in AGENTS.md.
 - **Zero-token guarantee** — enforced at both LLM routing sites (semantic router, multi-domain fallback); gate test: `tests/test_agent.py::test_multi_domain_llm_fallback_gated_by_profile_and_flag`.
-- **Core hardening (post-baseline)** — single tool results truncate to the per-model calibrated cap `max_tool_result_bytes` (window protection: one result can never swallow the 4k window); `_call_llm_directly` fails loud instead of appending a silently empty fragment. Tests: `test_tool_result_truncated_to_calibrated_limit`, `test_tool_result_limit_follows_calibration_override`.
+- **Core hardening (post-baseline)** — single tool results truncate to the per-model calibrated cap `max_tool_result_bytes` (window protection: one result can never swallow the 4k window); `_call_llm_directly` fails loud instead of appending a silently empty fragment; the pruner is now dual-metric (count pass + token pass that enforces `token_budget` even under the message cap, protecting leading system + last two, dropping lowest-score first). Tests: `test_tool_result_truncated_to_calibrated_limit`, `test_tool_result_limit_follows_calibration_override`, `test_pruner_token_pass_when_under_message_limit`.
 
 ## File Inventory (verified counts)
 | Tree | Py files | Notes |

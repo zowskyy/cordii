@@ -60,3 +60,31 @@ def test_pruner_returns_metrics():
     assert result.removed_count > 0
     assert result.estimated_tokens_after < result.estimated_tokens_before
     assert result.strategy == "importance"
+
+
+def test_pruner_token_pass_when_under_message_limit():
+    """4k window: under the message cap, a few LARGE messages can still
+    exceed the token budget. The token pass drops lowest-score messages
+    (leading system + two most recent protected) until within budget, and
+    keeps assistant+tool_calls alive while a cheaper target exists."""
+    pruner = ContextPruner(max_messages=100, token_budget=1000)
+    big_tool = '{"success": true, "data": "' + "x" * 8000 + '"}'
+    tc = {"id": "1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+    messages = [
+        _msg("system", "system prompt"),
+        _msg("user", "read the file"),
+        _msg("assistant", "", tool_calls=[tc]),
+        _msg("tool", big_tool),
+        _msg("user", "and read another"),
+        _msg("assistant", "", tool_calls=[tc]),
+        _msg("tool", "small result"),
+        _msg("assistant", "done"),
+    ]
+    result = pruner.prune(messages)
+    assert result.estimated_tokens_after <= 1000
+    assert result.removed_count == 1
+    assert result.strategy == "token"
+    assert result.messages[0].role == "system"        # leading system protected
+    assert result.messages[-1].content == "done"      # two most recent protected
+    assert not any("x" * 100 in (m.content or "") for m in result.messages)
+    assert sum(1 for m in result.messages if m.tool_calls) == 2  # single-pruner preservation
