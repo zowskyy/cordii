@@ -39,10 +39,40 @@ class CIPlugin(EventDrivenPlugin):
         self._last_fetch = 0.0
 
     def start(self) -> None:
-        pass
+        # D3: auto-detect repo from git remote if default placeholder
+        if self._repo in ("zowskyy/cordii", "unknown/repo"):
+            detected = self._detect_repo()
+            if detected:
+                self._repo = detected
 
     def stop(self) -> None:
         pass
+
+    def _detect_repo(self) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "config", "--get", "remote.origin.url"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                url = result.stdout.strip()
+                # Parse github.com:user/repo(.git)
+                import re
+                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
+                if m:
+                    repo = m.group(1).strip("/")
+                    # ensure owner/repo format
+                    if "/" in repo and len(repo.split("/")) == 2:
+                        return repo
+                # fallback: last two path parts
+                parts = url.rstrip("/").replace(":", "/").split("/")
+                if len(parts) >= 2:
+                    candidate = f"{parts[-2]}/{parts[-1].replace('.git','')}"
+                    if "/" in candidate:
+                        return candidate
+        except Exception:
+            pass
+        return None
 
     def get_status(self) -> dict[str, Any]:
         if time.time() - self._last_fetch > self._cache_ttl:
