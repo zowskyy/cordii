@@ -61,7 +61,7 @@ def resolve_calibration(model_name: str = "", explicit: Optional[Dict[str, Any]]
     """Build a calibration dict for a model: preset values + explicit overrides.
 
     Returns a copy (never the table itself) with a 'preset' key naming the
-    preset that was used.
+    preset that was used. Validates the result against the required schema.
     """
     key = preset_key_for_model(model_name)
     cal: Dict[str, Any] = dict(MODEL_PRESETS[key])
@@ -70,6 +70,7 @@ def resolve_calibration(model_name: str = "", explicit: Optional[Dict[str, Any]]
         for k, v in explicit.items():
             if v is not None:
                 cal[k] = v
+    validate_calibration(cal)
     return cal
 
 
@@ -88,6 +89,31 @@ def calibration_from_context(context: Optional["Context"]) -> Dict[str, Any]:
         return resolve_calibration(str(cfg.get("model", "")), explicit)
     return resolve_calibration(str(cfg.get("model", "")))
 
+
+REQUIRED_CALIBRATION_KEYS = {"max_tokens", "pruner_budget", "safety", "max_messages", "rounds_per_file", "max_tool_result_bytes"}
+
+
+def validate_calibration(cal: Dict[str, Any]) -> None:
+    """Validate a calibration dict has the required keys and sane types.
+
+    Raises:
+        ValueError: if a required key is missing or a value has the wrong type.
+    """
+    missing = REQUIRED_CALIBRATION_KEYS - cal.keys()
+    if missing:
+        raise ValueError(f"calibration missing required keys: {missing}")
+    if not isinstance(cal["max_tokens"], int) or cal["max_tokens"] <= 0:
+        raise ValueError("max_tokens must be a positive int")
+    if not isinstance(cal["pruner_budget"], int) or cal["pruner_budget"] <= 0:
+        raise ValueError("pruner_budget must be a positive int")
+    if not (0 < cal["safety"] <= 1):
+        raise ValueError("safety must be in (0, 1]")
+    if not isinstance(cal["max_messages"], int) or cal["max_messages"] <= 0:
+        raise ValueError("max_messages must be a positive int")
+    if not isinstance(cal["rounds_per_file"], (int, float)) or cal["rounds_per_file"] <= 0:
+        raise ValueError("rounds_per_file must be a positive number")
+    if not isinstance(cal["max_tool_result_bytes"], int) or cal["max_tool_result_bytes"] <= 0:
+        raise ValueError("max_tool_result_bytes must be a positive int")
 
 @dataclass
 class Event:

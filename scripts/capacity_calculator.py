@@ -178,7 +178,21 @@ def main():
     p.add_argument("--target-files", type=int, default=None, help="Target file window (e.g., 30)")
     p.add_argument("--solve-for", choices=["guidance", "per_file", "delta"], default=None, help="Parameter to solve for to reach --target-files")
     p.add_argument("--verify", type=str, default=None, help="JSONL log of runs to compare predicted vs observed")
+    p.add_argument("--diff", nargs=2, metavar=("LEFT", "RIGHT"), default=None, help="Compare two calibration JSON blobs and print changed keys")
     args = p.parse_args()
+
+    if args.diff:
+        left = json.loads(args.diff[0])
+        right = json.loads(args.diff[1])
+        all_keys = sorted(set(left) | set(right))
+        for key in all_keys:
+            l = left.get(key)
+            r = right.get(key)
+            if l == r:
+                print(f"  {key}: unchanged")
+            else:
+                print(f"  {key}: {l} -> {r}")
+        return
 
     if args.safety is not None and not (0 < args.safety <= 1):
         p.error("--safety must be in (0, 1]")

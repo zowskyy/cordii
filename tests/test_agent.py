@@ -227,3 +227,74 @@ def test_multi_domain_llm_fallback_gated_by_profile_and_flag():
     loop._try_multi_domain(query)
     assert routed == ["pizza"]
     assert len(loop._multi_domain_results) == 2
+
+
+def test_lite_profile_excludes_semantic_router_and_embedding(tmp_path):
+    """Profile isolation: lite profile must not register semantic_router or
+    embedding_model at runtime, and AgentLoop must see _semantic_router=None."""
+    ctx = Context(config={"profile": "lite", "workspace": str(tmp_path)})
+    reg = PluginRegistry(ctx)
+    reg.register(EventLogger(tmp_path / "test.db"))
+    reg.register(FakeModel([Message("assistant", "done")]))
+    reg.register(FileTools(tmp_path))
+    reg.register(AgentLoop())
+    reg.start_all()
+    try:
+        assert "semantic_router" not in ctx.plugins
+        assert "embedding_model" not in ctx.plugins
+        loop = ctx.plugins["agent_loop"]
+        assert loop._semantic_router is None
+    finally:
+        reg.stop_all()
+
+def test_injected_content_is_user_role_and_prefixed(tmp_path):
+    """Injection hardening: prompt injections must be inserted as user messages
+    with the exact '[injected context]' prefix, never as system."""
+    ctx, reg = build_agent(tmp_path, [Message("assistant", "done")])
+    try:
+        ctx.prompt_injections.append(Message("injection", "secret context"))
+        ctx.plugins["agent_loop"].run("hello")
+        injected = [m for m in ctx.messages if "injected context" in (m.content or "")]
+        assert len(injected) == 1
+        assert injected[0].role == "user"
+        assert injected[0].content.startswith("[injected context]")
+    finally:
+        reg.stop_all()
+
+
+def test_prompt_injections_cleared_after_processing(tmp_path):
+    """Injection hardening: prompt_injections list must be cleared after use."""
+    ctx, reg = build_agent(tmp_path, [Message("assistant", "done")])
+    try:
+        ctx.prompt_injections.append(Message("injection", "once"))
+        ctx.prompt_injections.append(Message("injection", "twice"))
+        ctx.plugins["agent_loop"].run("hello")
+        assert ctx.prompt_injections == []
+    finally:
+        reg.stop_all()
+
+
+def test_agent_emits_exactly_one_turn_start_and_one_turn_end(tmp_path):
+    """Event hygiene: one turn.start and one turn.end per agent run."""
+    ctx, reg = build_agent(tmp_path, [Message("assistant", "done")])
+    try:
+        ctx.plugins["agent_loop"].run("hello")
+        sid = ctx.plugins["continuity"].session_id
+        events = ctx.plugins["event_log"].get_session_events(sid)
+        types = [e.type for e in events]
+        assert types.count("turn.start") == 1
+        assert types.count("turn.end") == 1
+    finally:
+        reg.stop_all()
+
+
+def test_agent_emits_turn_round_once_per_iteration(tmp_path):
+    """Event hygiene: turn.round emitted once per loop iteration, not duplicated."""
+    ctx, reg = build_agent(tmp_path, [Message("assistant", "done")])
+    try:
+        seen: list[str] = []
+        ctx.events.on("turn.round", lambda e: seen.append(e.type))
+        ctx.plugins["agent_loop"].run("hello")
+        assert seen.count("turn.round") == 1
+    finally:
+        reg.stop_all()

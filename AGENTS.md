@@ -171,7 +171,11 @@ lite:
   Deterministic routing only
 
 full:
+<<<<<<< HEAD
   42 plugins
+=======
+   42 total plugins (19 shared + 23 full-only)
+>>>>>>> f9cef7b (Invariant tests, calibration validation, capacity diff, live 1.5B validation)
   May use LLM functionality only when properly gated
   SemanticRouter remains disabled unless explicitly enabled
 ```
