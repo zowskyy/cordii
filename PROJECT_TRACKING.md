@@ -24,6 +24,19 @@ Lite-first local agent for 1.5B models (qwen2.5-coder:1.5b). Pool philosophy: de
 | `scripts/` | 2 | `capacity_calculator.py`, `capacity_diff.py` |
 | root | 2 py | `main.py`, `ui.py` (ratified Gradio harness); `run.ps1` / `run-qwen.ps1` launchers |
 
+## Milestone: v2.0-baseline-stable (2026-08-30)
+- **Model:** `qwen2.5-coder:1.5b`
+- **Deterministic suite:** 276 passed, 7 skipped
+- **Live integration:** 4/4 passed in ~9.47s
+- **Validated invariants:**
+  - 1.5B baseline stable
+  - 4k context hygiene (pruner token+message pass, tool-result truncation)
+  - Zero-token `lite` profile
+  - Calibration centralization + validation (`validate_calibration` wired into `resolve_calibration`)
+  - Profile isolation (`lite` excludes `semantic_router`/`embedding_model`)
+  - Injection hardening (`[injected context]` prefix, `user` role)
+  - Event hygiene (exactly one `turn.start`/`turn.end`, one `turn.round` per iteration)
+
 ## Open Items (honest)
 - `requirements.txt` pins `pytest<9`; the suite is also verified on 9.1.1 (works, unpinned).
 - The literal verification gate (`--basetemp C:\tmp\pytest_cordiiv2`) needs a plain shell: under the DSH workspace-write sandbox `C:\tmp` is file-write-readonly and `os.mkdir(0o700)` gets hostile ACLs, breaking `tempfile.mkdtemp`. Run with a writable `TEMP` instead — same suite, same result.
@@ -32,7 +45,8 @@ Lite-first local agent for 1.5B models (qwen2.5-coder:1.5b). Pool philosophy: de
 - SemanticRouter embeddings cost tokens when enabled (full + `--enable-semantic-router` only); lite keeps it OFF.
 
 ## Verification
-- **Hard gate (deterministic):** `pytest` → 258 passed, 7 skipped (the 7 live tests skip without `--live`).
-- **Live (confirmatory):** `pytest --live` with Ollama at 127.0.0.1:11434 → 263 passed (all 7 live 1.5B tests green in the latest run).
+- **Hard gate (deterministic):** `pytest --basetemp C:\tmp\pytest_cordiiv2` → 276 passed, 7 skipped
+- **Live (confirmatory):** `pytest --basetemp C:\tmp\pytest_cordiiv2 --live` → 280 passed, 3 skipped (4/4 live 1.5B integration tests green)
 - **gitignore gate:** `git check-ignore` confirms `.cache/*`, `continuity/*.db`, `*.db`, `workspace/*` ignored (`.gitignore`).
+- **Baseline gate:** `powershell -File scripts/baseline_gate.ps1` (re-runs deterministic + live gates with assertions).
 - **Manual:** `python main.py --profile lite` vs `full`; `python scripts/capacity_calculator.py --model 1.5b`.
