@@ -273,21 +273,38 @@ class AgentLoop(Plugin):
         task_state = {"goal": user_text, "files_touched": [], "tools_used": [], "unresolved_subtasks": []}
         TOKEN_BUDGET = 3000  # P1 FIX: 3000 leaves 1k headroom for 4096 ctx (Modelfile num_ctx 4096)
 
-        tool_guidance = json.dumps({
-             "role": "system",
-             "content": "You are a tool-using agent. You have access to the following tools:\n" +
-             "\n".join([f"- {s['function']['name']}: {s['function'].get('description', '')}" for s in self._tool_schemas]) +
-             "\n\nTool schemas:\n" +
-             "\n".join([json.dumps(s['function'], ensure_ascii=False) for s in self._tool_schemas]) +
-             "\n\nRULES:\n" +
-             "1. When you need to use a tool, respond with ONLY a JSON object in this exact format:\n" +
-             '{"tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "tool_name", "arguments": {"param1": "value1", "param2": "value2"}}}]}\n' +
-             "2. Call EXACTLY ONE tool per response. Do not call multiple tools in a single response.\n" +
-             "3. Do not include any other text, markdown, or code blocks in your response when calling a tool.\n" +
-             "4. For search/find tasks: use list_directory or read_file to check existence. If a file does not exist, report that it does not exist. Do NOT create the file.\n" +
-             "5. After tool results are provided, you may continue the conversation or call another tool if needed.\n" +
-             "6. For mathematical problems (algebra, calculus, limits, matrices), the /math command can be used for exact symbolic computation. Use tools for non-math tasks only."
-        }, ensure_ascii=False)
+        # Track A: Minimal guidance for 1.5B 4k window — lite saves ~600 tokens
+        is_lite = self.context.config.get("profile", "lite") == "lite" if self.context else True
+        if is_lite:
+            # Pre-existing systems only: 3 file tools (write/read/list) — no scaffold_app
+            tool_guidance = json.dumps({
+                "role": "system",
+                "content": (
+                    "You are a tool-using agent (4k context). Tools:\n"
+                    "- write_file(path,content): write file\n"
+                    "- read_file(path): read file\n"
+                    "- list_directory(path='.'): list dir\n"
+                    "Rules: 1) Respond ONLY JSON: {\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"tool_name\",\"arguments\":{}}}]} "
+                    "2) ONE tool per response 3) Check exists via list/read before create 4) Use /math for math\n"
+                    "Example: {\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":{\"path\":\"a.txt\",\"content\":\"hello\"}}}]}"
+                )
+            }, ensure_ascii=False)
+        else:
+            tool_guidance = json.dumps({
+                 "role": "system",
+                 "content": "You are a tool-using agent. You have access to the following tools:\n" +
+                 "\n".join([f"- {s['function']['name']}: {s['function'].get('description', '')}" for s in self._tool_schemas]) +
+                 "\n\nTool schemas:\n" +
+                 "\n".join([json.dumps(s['function'], ensure_ascii=False) for s in self._tool_schemas]) +
+                 "\n\nRULES:\n" +
+                 "1. When you need to use a tool, respond with ONLY a JSON object in this exact format:\n" +
+                 '{"tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "tool_name", "arguments": {"param1": "value1", "param2": "value2"}}}]}\n' +
+                 "2. Call EXACTLY ONE tool per response. Do not call multiple tools in a single response.\n" +
+                 "3. Do not include any other text, markdown, or code blocks in your response when calling a tool.\n" +
+                 "4. For search/find tasks: use list_directory or read_file to check existence. If a file does not exist, report that it does not exist. Do NOT create the file.\n" +
+                 "5. After tool results are provided, you may continue the conversation or call another tool if needed.\n" +
+                 "6. For mathematical problems (algebra, calculus, limits, matrices), the /math command can be used for exact symbolic computation. Use tools for non-math tasks only."
+            }, ensure_ascii=False)
         self.context.append_message("system", tool_guidance)
         if self.context is not None:
             self.context.events.emit("system.message", {"content": tool_guidance})
@@ -367,6 +384,7 @@ class AgentLoop(Plugin):
                     continue
 
             if not tool_calls:
+                self.context.events.emit("turn.end", {"final_result": response.content, "session_id": session_id})
                 return response.content
 
             failed_this_round: list[str] = []
@@ -450,10 +468,7 @@ class AgentLoop(Plugin):
                     })
                     successful_results.append(result)
 
-            if len(failed_this_round) == 0 and successful_results:
-                self.context.events.emit("turn.end", {"final_result": "done", "session_id": session_id})
-                return "done"
-
+            # Pre-existing: continue until model emits no tool_calls (not auto-done after first write) — enables multi-file app builds within 4k
             if len(failed_this_round) > 1 and self._replan_count < 2:
                 replan_msg = RepairMessageBuilder.global_replan(failed_this_round)
                 self.context.append_message("system", replan_msg)
