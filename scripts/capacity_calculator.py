@@ -32,6 +32,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.context import MODEL_PRESETS  # noqa: E402  (single source of truth)
 
+
+# Anchors (measured 2026-08-25, 1.5B, 100-file sample)
+# Update these values when you re-measure guidance/per_file/delta after adding tools/templates.
 ANCHORS = {
     "lite_guidance": 70,
     "full_guidance": 419,
@@ -41,6 +44,19 @@ ANCHORS = {
     "delta_full": 40,
     "base_overhead": 30,
 }
+
+
+def load_json_blob(value: str) -> dict:
+    """
+    Try to parse value as JSON; if that fails, treat as a file path and load from disk.
+    """
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        path = Path(value)
+        if not path.exists():
+            raise ValueError(f"Invalid JSON or file path: {value}")
+        return json.loads(path.read_text())
 
 
 def estimate_window(
@@ -178,12 +194,18 @@ def main():
     p.add_argument("--target-files", type=int, default=None, help="Target file window (e.g., 30)")
     p.add_argument("--solve-for", choices=["guidance", "per_file", "delta"], default=None, help="Parameter to solve for to reach --target-files")
     p.add_argument("--verify", type=str, default=None, help="JSONL log of runs to compare predicted vs observed")
-    p.add_argument("--diff", nargs=2, metavar=("LEFT", "RIGHT"), default=None, help="Compare two calibration JSON blobs and print changed keys")
+    p.add_argument("--diff", nargs=2, metavar=("LEFT", "RIGHT"), default=None, help="Compare two calibration JSON blobs or files and print changed keys")
+    p.add_argument("--quiet", action="store_true", help="Print only max_files for best config")
+    p.add_argument("--dump-preset", action="store_true", help="Print MODEL_PRESETS entry for --model and exit")
     args = p.parse_args()
 
+    if args.dump_preset:
+        print(json.dumps(MODEL_PRESETS[args.model], indent=2))
+        return
+
     if args.diff:
-        left = json.loads(args.diff[0])
-        right = json.loads(args.diff[1])
+        left = load_json_blob(args.diff[0])
+        right = load_json_blob(args.diff[1])
         all_keys = sorted(set(left) | set(right))
         for key in all_keys:
             l = left.get(key)
@@ -289,6 +311,11 @@ def main():
 
     if args.json:
         print(json.dumps({"model": label, "max_tokens": max_tokens, "safety": safety, "results": results}, indent=2))
+        return
+
+    if args.quiet:
+        best = max(display_results, key=lambda x: x["max_files"])
+        print(best["max_files"])
         return
 
     print(f"Capacity Calculator — {label}")
