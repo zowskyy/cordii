@@ -8,6 +8,7 @@ Lite-first local agent for 1.5B models (qwen2.5-coder:1.5b). Pool philosophy: de
 - **Calibration separation** — model-specific numbers live only in `core/context.py` `MODEL_PRESETS`; invariant layers read via `calibration_from_context()` (AGENTS.md axiom: "Calibration separation").
 - **De-Kilo** — `.kilo/`, `kilo.json`, and the AGENTS.md Kilo section removed; methodology lives in AGENTS.md.
 - **Zero-token guarantee** — enforced at both LLM routing sites (semantic router, multi-domain fallback); gate test: `tests/test_agent.py::test_multi_domain_llm_fallback_gated_by_profile_and_flag`.
+- **Core hardening (post-baseline)** — single tool results truncate to the per-model calibrated cap `max_tool_result_bytes` (window protection: one result can never swallow the 4k window); `_call_llm_directly` fails loud instead of appending a silently empty fragment. Tests: `test_tool_result_truncated_to_calibrated_limit`, `test_tool_result_limit_follows_calibration_override`.
 
 ## File Inventory (verified counts)
 | Tree | Py files | Notes |
@@ -31,7 +32,7 @@ Lite-first local agent for 1.5B models (qwen2.5-coder:1.5b). Pool philosophy: de
 - SemanticRouter embeddings cost tokens when enabled (full + `--enable-semantic-router` only); lite keeps it OFF.
 
 ## Verification
-- **Hard gate (deterministic):** `pytest` → 256 passed, 7 skipped (the 7 live tests skip without `--live`).
+- **Hard gate (deterministic):** `pytest` → 258 passed, 7 skipped (the 7 live tests skip without `--live`).
 - **Live (confirmatory):** `pytest --live` with Ollama at 127.0.0.1:11434 → 263 passed (all 7 live 1.5B tests green in the latest run).
 - **gitignore gate:** `git check-ignore` confirms `.cache/*`, `continuity/*.db`, `*.db`, `workspace/*` ignored (`.gitignore`).
 - **Manual:** `python main.py --profile lite` vs `full`; `python scripts/capacity_calculator.py --model 1.5b`.

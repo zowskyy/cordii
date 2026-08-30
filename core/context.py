@@ -26,9 +26,12 @@ logger = logging.getLogger(__name__)
 # safe direction — it folds more often but can never exceed the model window.
 # ---------------------------------------------------------------------------
 MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
-    "1.5b": {"label": "qwen2.5-coder:1.5b (4k, flaky)", "max_tokens": 4096, "pruner_budget": 3000, "safety": 0.85, "max_messages": 40, "rounds_per_file": 1.3},
-    "7b": {"label": "qwen2.5-coder:7b (8k, stable)", "max_tokens": 8192, "pruner_budget": 6500, "safety": 0.88, "max_messages": 60, "rounds_per_file": 1.05},
-    "14b": {"label": "qwen2.5-coder:14b (16k)", "max_tokens": 16384, "pruner_budget": 14000, "safety": 0.90, "max_messages": 80, "rounds_per_file": 1.02},
+    # max_tool_result_bytes: hard cap on a single tool result entering the context
+    # (~56% of the model window in bytes, at ~3.5 bytes/token) — one result must
+    # never be able to swallow the window, regardless of file size on disk.
+    "1.5b": {"label": "qwen2.5-coder:1.5b (4k, flaky)", "max_tokens": 4096, "pruner_budget": 3000, "safety": 0.85, "max_messages": 40, "rounds_per_file": 1.3, "max_tool_result_bytes": 8192},
+    "7b": {"label": "qwen2.5-coder:7b (8k, stable)", "max_tokens": 8192, "pruner_budget": 6500, "safety": 0.88, "max_messages": 60, "rounds_per_file": 1.05, "max_tool_result_bytes": 16384},
+    "14b": {"label": "qwen2.5-coder:14b (16k)", "max_tokens": 16384, "pruner_budget": 14000, "safety": 0.90, "max_messages": 80, "rounds_per_file": 1.02, "max_tool_result_bytes": 32768},
 }
 DEFAULT_PRESET_KEY = "1.5b"
 

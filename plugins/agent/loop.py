@@ -47,6 +47,7 @@ class AgentLoop(Plugin):
         # Built in start() from the active model calibration (core.context).
         self._context_pruner: ContextPruner | None = None
         self._token_budget = TOKEN_BUDGET
+        self._max_result_bytes = MODEL_PRESETS[DEFAULT_PRESET_KEY]["max_tool_result_bytes"]
         self._parse_retry_count = 0
         self._routers: SpecializedRouters | None = None
         self._semantic_router: SemanticRouter | None = None
@@ -61,6 +62,7 @@ class AgentLoop(Plugin):
         assert self.context is not None
         cal = calibration_from_context(self.context)
         self._token_budget = cal["pruner_budget"]
+        self._max_result_bytes = cal["max_tool_result_bytes"]
         self._context_pruner = ContextPruner(max_messages=cal["max_messages"], token_budget=cal["pruner_budget"])
         files = self.context.plugins["file_tools"]
         self._tool_schemas = files.schemas()
@@ -227,6 +229,14 @@ class AgentLoop(Plugin):
         return final or Message("assistant", "")
 
     def _record_tool_result(self, tool_name: str, arguments: dict, result: str, success: bool) -> None:
+        if isinstance(result, str):
+            # 4k window protection (calibration-separation axiom): a single tool
+            # result must never occupy more than its calibrated share of the
+            # window. The file keeps its full content on disk; the model works
+            # on the first chunk and the marker tells it the file continues.
+            raw = result.encode("utf-8")
+            if len(raw) > self._max_result_bytes:
+                result = raw[: self._max_result_bytes].decode("utf-8", errors="ignore") + f"\n…[truncated: showing first {self._max_result_bytes} bytes of a larger file]"
         call_id = f"zt_{tool_name}_{hashlib.md5(str(arguments).encode()).hexdigest()[:8]}"
         if self.context is not None:
             self.context.events.emit("tool.invoked", {"tool_name": tool_name, "call_id": call_id, "arguments": arguments})
@@ -274,14 +284,14 @@ class AgentLoop(Plugin):
         self._multi_domain_results = deterministic
 
     def _call_llm_directly(self, text: str) -> str:
+        # Fail-loud: if the model call fails here (Ollama down, model error),
+        # the main agent loop would fail too — surface the real error instead
+        # of appending a silently empty fragment to the aggregated answer.
         model = self.context.plugins.get("ollama_model") if self.context else None
         if model is None:
             return ""
-        try:
-            response = model.chat([Message(role="user", content=text)], tools=[])
-            return response.content or ""
-        except Exception:
-            return ""
+        response = model.chat([Message(role="user", content=text)], tools=[])
+        return response.content or ""
 
     def run(self, user_text: str, on_stream: Optional[Callable[[Message], None]] = None) -> str:
         assert self.context is not None

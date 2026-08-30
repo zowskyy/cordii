@@ -24,10 +24,10 @@ class FakeModel(Plugin):
         return self.responses.pop(0)
 
 
-def build_agent(tmp_path, responses):
+def build_agent(tmp_path, responses, config=None):
     from core.messages import Message
 
-    ctx = Context()
+    ctx = Context(config=config or {})
     reg = PluginRegistry(ctx)
     reg.register(EventLogger(tmp_path / "test.db"))
     reg.register(FakeModel(responses))
@@ -139,6 +139,44 @@ def test_agent_lite_uses_envelope(tmp_path):
         b = RealityProjector(event_log).compile_request(sid, loop._manifest, loop._system_prompt, loop._tool_schemas, TOKEN_BUDGET)
         assert a.full_request_hash == b.full_request_hash
         assert a.request_prefix_hash == b.request_prefix_hash
+    finally:
+        reg.stop_all()
+
+
+def test_tool_result_truncated_to_calibrated_limit(tmp_path):
+    """4k window protection: a single tool result must never exceed its
+    calibrated byte cap (1.5b preset: 8192 bytes) — one result cannot swallow
+    the window regardless of file size on disk. Truncation is marked so the
+    model knows the file continues."""
+    from core.context import MODEL_PRESETS, DEFAULT_PRESET_KEY
+
+    ctx, reg = build_agent(tmp_path, [Message("assistant", "done")])
+    try:
+        limit = MODEL_PRESETS[DEFAULT_PRESET_KEY]["max_tool_result_bytes"]
+        loop = ctx.plugins["agent_loop"]
+        loop._record_tool_result("read_file", {"path": "big.txt"}, "x" * (limit + 5000), True)
+        content = ctx.messages[-1].content
+        assert len(content.encode("utf-8")) <= limit + 100  # + marker overhead
+        assert content[:limit] == "x" * limit
+        assert "truncated" in content
+    finally:
+        reg.stop_all()
+
+
+def test_tool_result_limit_follows_calibration_override(tmp_path):
+    """Calibration separation: the tool-result cap comes from
+    Context.config["calibration"] (merged over the preset), not a loop literal."""
+    ctx, reg = build_agent(
+        tmp_path, [Message("assistant", "done")],
+        config={"calibration": {"max_tool_result_bytes": 100}},
+    )
+    try:
+        loop = ctx.plugins["agent_loop"]
+        assert loop._max_result_bytes == 100
+        loop._record_tool_result("read_file", {"path": "b.txt"}, "y" * 500, True)
+        content = ctx.messages[-1].content
+        assert len(content.encode("utf-8")) <= 100 + 100
+        assert "truncated" in content
     finally:
         reg.stop_all()
 
