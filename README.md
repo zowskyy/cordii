@@ -1,5 +1,7 @@
 # Cordi v2 — Lite-First Local Agent
 
+
+
 Fork of corditelite with first-principles fixes for 1.5B local models (qwen2.5-coder:1.5b, 4k ctx).
 
 ## What changed vs corditelite (audit fixes)
@@ -15,7 +17,7 @@ Fork of corditelite with first-principles fixes for 1.5B local models (qwen2.5-c
 - `.gitignore` + `EventLog` snapshot now `base64+zlib` (was latin-1 fragile), cache `entries` nesting avoids `"version"` key collision.
 
 **P2 — Complexity**
-- `main.py` `--profile lite|full` (default `lite` = 16 plugins vs 31). Lite is the real cordis-lite.
+- `main.py` `--profile lite|full` (default `lite` = 19 plugins vs 42). Lite is the real cordis-lite.
 - `QuerySplitter` hardened: strong vs weak signals, collision-free (`add 5 days` → datetime, `add 2+3` → math, `time` alone → general).
 
 ## Architecture — Lite (default)
@@ -30,9 +32,9 @@ Full adds: EmbeddingModel, SemanticRouter (gated), Health/Tracing/Metrics, Perso
 ## Quick Start
 ```bash
 pip install -r requirements.txt
-python main.py --profile lite              # 16 plugins, default
-python main.py --profile full --enable-semantic-router  # 31 plugins + embeddings
-# or via python chat.py / ui.py
+python main.py --profile lite              # 19 plugins, default
+python main.py --profile full --enable-semantic-router  # 42 plugins + embeddings
+# or via python ui.py (Gradio web UI)
 ```
 
 Commands: `/math`, `/datetime`, `/units`, `/help`, `/quit`
@@ -49,7 +51,7 @@ python -m pytest tests/test_math.py -q
 ## Profiles
 | Profile | Plugins | Use |
 |---|---|---|
-| lite (default) | 16 | Local 1.5B, 4k ctx, save tokens |
-| full | 31 | Debug, memory, observability |
+| lite (default) | 19 | Local 1.5B, 4k ctx, save tokens |
+| full | 42 | Debug, memory, observability |
 
 See `PROJECT_TRACKING.md` for file inventory.

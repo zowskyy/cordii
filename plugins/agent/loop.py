@@ -6,12 +6,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from core.context import Context
+from core.context import Context, MODEL_PRESETS, DEFAULT_PRESET_KEY, calibration_from_context
 from core.context_pruner import ContextPruner, PrunedContext
 from core.errors import ToolError
+from core.events import Manifest, SYSTEM_MESSAGE, USER_MESSAGE
 from core.failure_taxonomy import FailureClassifier, FailureType, PreFlightGuard
 from core.messages import Message
 from core.plugin import Plugin
+from core.reality import RealityProjector, RequestEnvelope
 from core.self_healing import BudgetedSelfHealing
 from core.summarizer import Summarizer
 from plugins.agent.routers import try_datetime_router, try_math_router, try_units_router
@@ -19,6 +21,12 @@ from plugins.agent.semantic_router import SemanticRouter
 from plugins.agent.specialized_routers import RepairMessageBuilder, SpecializedRouters, ToolResultVerifier
 from plugins.agent.aggregate_response import AggregateResponse
 from plugins.agent.multi_domain_router import MultiDomainRouter
+
+# Back-compat alias (tests import it). The VALUE comes from the shared model
+# calibration table (core.context.MODEL_PRESETS), not a literal here: the
+# invariant layer carries no model-specific numbers. 1.5b default = 3000
+# budget leaving 1k headroom for the 4096 window (Modelfile num_ctx 4096).
+TOKEN_BUDGET = MODEL_PRESETS[DEFAULT_PRESET_KEY]["pruner_budget"]
 
 
 class AgentLoop(Plugin):
@@ -36,16 +44,24 @@ class AgentLoop(Plugin):
         self._replan_count = 0
         self._healing = BudgetedSelfHealing()
         self._context_builder = None
-        self._context_pruner = ContextPruner()
+        # Built in start() from the active model calibration (core.context).
+        self._context_pruner: ContextPruner | None = None
+        self._token_budget = TOKEN_BUDGET
         self._parse_retry_count = 0
         self._routers: SpecializedRouters | None = None
         self._semantic_router: SemanticRouter | None = None
         self._multi_domain_router: MultiDomainRouter | None = None
         self._aggregator: AggregateResponse | None = None
         self._multi_domain_results: list[Any] = []
+        self._projector: RealityProjector | None = None
+        self._manifest: Manifest | None = None
+        self._system_prompt: str | None = None
 
     def start(self) -> None:
         assert self.context is not None
+        cal = calibration_from_context(self.context)
+        self._token_budget = cal["pruner_budget"]
+        self._context_pruner = ContextPruner(max_messages=cal["max_messages"], token_budget=cal["pruner_budget"])
         files = self.context.plugins["file_tools"]
         self._tool_schemas = files.schemas()
         self._tool_handlers = {s["function"]["name"]: files.execute for s in self._tool_schemas}
@@ -166,6 +182,41 @@ class AgentLoop(Plugin):
             return cont.session_id
         return "default"
 
+    def _build_manifest(self, system_prompt: str) -> Manifest:
+        sch_json = json.dumps(self._tool_schemas, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        sch_hash = hashlib.sha256(sch_json.encode("utf-8")).hexdigest()
+        profile = self.context.config.get("profile", "lite") if self.context else "lite"
+        digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "system_prompt": system_prompt,
+                    "tool_schema_hash": sch_hash,
+                    "profile": profile,
+                    "budget_tokens": self._token_budget,
+                    "serializer_version": "v1",
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return Manifest(
+            digest=digest,
+            tool_schema_hash=sch_hash,
+            prompt_hash=hashlib.sha256(system_prompt.encode("utf-8")).hexdigest(),
+            serializer_version="v1",
+            profile=profile,
+            budget_tokens=self._token_budget,
+        )
+
+    def _compile_request_envelope(self, session_id: str, system_prompt: str) -> RequestEnvelope:
+        if self._projector is None:
+            self._projector = RealityProjector(self.context.plugins["event_log"])
+        if self._manifest is None:
+            self._manifest = self._build_manifest(system_prompt)
+        self._projector.invalidate_cache(session_id)
+        return self._projector.compile_request(session_id, self._manifest, system_prompt, self._tool_schemas, self._token_budget)
+
     @staticmethod
     def _consume_stream(chunks: Any, on_stream: Optional[Callable[[Message], None]] = None) -> Message:
         final = None
@@ -203,6 +254,16 @@ class AgentLoop(Plugin):
         unresolved = [r for r in multi.results if r.response is None]
 
         if not deterministic:
+            return
+
+        # Zero-token guarantee (P0): the LLM fallback for unresolved fragments is a
+        # routing LLM step — allowed ONLY in the full profile AND with explicit
+        # --enable-semantic-router. Otherwise abandon multi-domain routing and let
+        # the query fall through to the deterministic routers + normal agent loop.
+        if unresolved and not (
+            self.context.config.get("profile") == "full"
+            and self.context.config.get("semantic_router_enabled", False)
+        ):
             return
 
         if unresolved:
@@ -273,7 +334,6 @@ class AgentLoop(Plugin):
             return self._aggregator.aggregate(self._multi_domain_results) if self._aggregator else str(self._multi_domain_results)
 
         task_state = {"goal": user_text, "files_touched": [], "tools_used": [], "unresolved_subtasks": []}
-        TOKEN_BUDGET = 3000  # P1 FIX: 3000 leaves 1k headroom for 4096 ctx (Modelfile num_ctx 4096)
 
         # Track A 3x: Minimal guidance only when explicitly lite (tests without profile keep full for backward compat)
         is_lite = (self.context.config.get("profile") == "lite") if self.context and "profile" in self.context.config else False
@@ -303,18 +363,19 @@ class AgentLoop(Plugin):
                  "6. For mathematical problems (algebra, calculus, limits, matrices), the /math command can be used for exact symbolic computation. Use tools for non-math tasks only.\n" +
                  "7. For simple chat/greetings (e.g., 'Say hello'), respond directly with text and do NOT use tools."
             }, ensure_ascii=False)
+        self._system_prompt = tool_guidance
         self.context.append_message("system", tool_guidance)
-        if self.context is not None:
+        if not is_lite and self.context is not None:
             self.context.events.emit("system.message", {"content": tool_guidance})
 
         session_id = self._get_session_id()
         for round_idx in range(self.max_rounds):
             self.context.check_cancelled()
             # P1 FIX: Unified single pruner (was dual: Summarizer.fold + prune). Now single ContextPruner handles both
-            # token budget and message count, preserves assistant tool_calls for 1.5B coherence
+            # token budget and message count (per-model via core.context calibration), preserves assistant tool_calls
             needs_prune = False
             est_tokens = Summarizer.estimate_tokens(str(self.context.messages))
-            if est_tokens > TOKEN_BUDGET or len(self.context.messages) > self._context_pruner.max_messages:
+            if est_tokens > self._token_budget or len(self.context.messages) > self._context_pruner.max_messages:
                 needs_prune = True
             if needs_prune:
                 pruned = self._context_pruner.prune(self.context.messages, task_state)
@@ -337,6 +398,7 @@ class AgentLoop(Plugin):
                     self.context.append_message("system", memory_msg)
                     if self.context is not None:
                         self.context.events.emit("memory.augmented", {"session_id": session_id, "context_length": len(memory_context)})
+                    self.context.events.emit(SYSTEM_MESSAGE, {"content": memory_context, "provenance": "memory"})
 
             # P0 FIX: Removed duplicate turn.start emit (was firing per-round + outer). Use turn.round for per-round.
             self.context.events.emit("turn.round", {
@@ -350,16 +412,24 @@ class AgentLoop(Plugin):
             for injection in list(self.context.prompt_injections):
                 safe_content = f"[injected context] {injection.content}"
                 self.context.append_message("user", safe_content)
+                if self.context is not None:
+                    self.context.events.emit(USER_MESSAGE, {"content": safe_content, "provenance": "injection"})
             self.context.prompt_injections.clear()
 
+            if is_lite:
+                messages = self._compile_request_envelope(session_id, tool_guidance).messages
+            else:
+                messages = self.context.messages
             if self.stream:
-                chunks = model.stream_chat(self.context.messages, self._tool_schemas)
+                chunks = model.stream_chat(messages, self._tool_schemas)
                 response = self._consume_stream(chunks, on_stream=on_stream)
             else:
-                response = model.chat(self.context.messages, self._tool_schemas)
+                response = model.chat(messages, self._tool_schemas)
 
             tool_calls = response.tool_calls or []
-            parser = self.context.plugins.get("tool_call_parser")
+            # main.py registers OllamaToolCallParser under its own name
+            # ("ollama_tool_call_parser"); accept the generic role name too.
+            parser = self.context.plugins.get("ollama_tool_call_parser") or self.context.plugins.get("tool_call_parser")
             if not tool_calls and parser is not None and response.content:
                 tool_calls = parser.parse(response, self._tool_schemas) or []
             self.context.append_message("assistant", response.content, tool_calls=tool_calls)

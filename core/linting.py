@@ -80,7 +80,10 @@ class LintingEngine:
     def lint_directory(self, directory: Path) -> LintResult:
         combined = LintResult(file=str(directory.relative_to(self.root) if directory.is_relative_to(self.root) else directory))
         for py in directory.rglob("*.py"):
-            if any(part.startswith(".") or part == "__pycache__" for part in py.parts):
+            # Filter on parts RELATIVE to the linted dir: dot/__pycache__ ancestors
+            # of the tree (e.g. a ".cache" or temp dir) must not silence linting.
+            rel_parts = py.relative_to(directory).parts
+            if any(part.startswith(".") or part == "__pycache__" for part in rel_parts):
                 continue
             result = self.lint_file(py)
             combined.issues.extend(result.issues)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from core.context import Context
+from core.context import Context, resolve_calibration
 from core.registry import PluginRegistry
 from plugins.agent.loop import AgentLoop
 from plugins.agent.semantic_router import SemanticRouter
@@ -52,10 +52,17 @@ from plugins.ui.terminal import TerminalUI
 def build_application(workspace: Path, model_name: str, ollama_url: str, db_path: Path, profile: str = "lite", enable_semantic_router: bool = False):
     """
     P2 FIX: Lite vs Full profile.
-    - lite (default): only what saves tokens for 1.5B. 16 plugins vs 31.
+    - lite (default): only what saves tokens for 1.5B. 19 plugins vs 42.
       Zero-token pool + file tools + loop + single pruner. No observability theater.
-    - full: adds all 31 plugins for debugging/analysis. Semantic router gated even here.
+    - full: adds all 42 plugins for debugging/analysis. Semantic router gated even here.
+
+    Per-model numbers (pruner budget, message cap, ...) are NOT literals in the
+    invariant layer: they resolve from the model calibration table
+    (core.context.MODEL_PRESETS) and ride along in Context.config["calibration"].
     """
+    # Resolve per-model calibration (table in core.context) so loop/pruner read
+    # it from config. Explicit config overrides possible via resolve_calibration.
+    calibration = resolve_calibration(model_name)
     # Pass semantic flag via context config so SemanticRouter and loop can gate
     ctx = Context(config={
         "workspace": str(workspace.resolve()),
@@ -63,6 +70,7 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         "ollama_url": ollama_url,
         "profile": profile,
         "semantic_router_enabled": enable_semantic_router,
+        "calibration": calibration,
     })
     reg = PluginRegistry(ctx)
 
@@ -138,7 +146,7 @@ def main() -> int:
     p.add_argument("--model", default="qwen2.5-coder:1.5b", help="Ollama model name")
     p.add_argument("--ollama-url", default="http://127.0.0.1:11434", help="Ollama base URL")
     p.add_argument("--db", default="continuity/continuity.db", help="SQLite event log path")
-    p.add_argument("--profile", default="lite", choices=["lite", "full"], help="lite=16 plugins (default, saves tokens), full=31 plugins (debug)")
+    p.add_argument("--profile", default="lite", choices=["lite", "full"], help="lite=19 plugins (default, saves tokens), full=42 plugins (debug)")
     p.add_argument("--enable-semantic-router", action="store_true", help="Enable semantic router (embedding cost, off by default)")
     args = p.parse_args()
     workspace = Path(args.workspace).expanduser().resolve()

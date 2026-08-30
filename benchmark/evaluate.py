@@ -68,6 +68,7 @@ class EvaluationHarness:
                     "arguments": ev.payload.get("arguments", {}),
                 })
 
+            agent_trace["result"] = result_text
             verifier = TaskVerifier()
             verification = verifier.verify(self._make_verified_task(task), agent_trace, Path(workspace))
 
@@ -102,8 +103,11 @@ class EvaluationHarness:
         if "write" in task.tools_required or "multi" in task.tags:
             for filename in ["a.txt", "b.txt"]:
                 Path(workspace, filename).write_text("", encoding="utf-8")
-        if "read" in task.tools_required and "write" not in task.tools_required:
+        if "read_file" in task.tools_required and "write_file" not in task.tools_required:
             src = task.user_input.split()[1] if len(task.user_input.split()) > 1 else "file.txt"
+            Path(workspace, src).write_text("preexisting content", encoding="utf-8")
+        if "sequence" in task.tags:
+            src = task.user_input.split()[1] if len(task.user_input.split()) > 1 else "src.txt"
             Path(workspace, src).write_text("preexisting content", encoding="utf-8")
         if "list" in task.tools_required:
             Path(workspace, "file.txt").write_text("preexisting content", encoding="utf-8")

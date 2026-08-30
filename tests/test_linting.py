@@ -112,3 +112,18 @@ def test_lint_directory():
         (root / "bad.py").write_text("class Bad:\n    def __init__(self): pass\n", encoding="utf-8")
         result = engine.lint_directory(root)
         assert result.error_count >= 1
+
+
+def test_lint_directory_under_dot_prefixed_path():
+    """Regression: a dot-prefixed ANCESTOR (e.g. .pytest_tmp) of the linted dir
+    must not silence linting — the skip filter applies to parts inside the tree."""
+    import shutil
+    import tempfile
+    engine = LintingEngine(root=Path.cwd())
+    tmp = Path(tempfile.mkdtemp(prefix=".lintdot_"))
+    try:
+        (tmp / "bad.py").write_text("class Bad:\n    def __init__(self): pass\n", encoding="utf-8")
+        result = engine.lint_directory(tmp)
+        assert result.error_count >= 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)

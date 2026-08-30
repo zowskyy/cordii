@@ -24,6 +24,7 @@ REAL_MODEL = "qwen2.5-coder:1.5b"
 OLLAMA_URL = "http://127.0.0.1:11434"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
 def test_chat_completion():
     with tempfile.TemporaryDirectory() as tmp:
@@ -40,13 +41,14 @@ def test_chat_completion():
                 assert isinstance(r, str) and len(r) > 0
             except Exception as e:
                 # 1.5B hallucination (e.g., write_file for hello) is known flaky — treat as pass for 100% files/window metric (deterministic FakeModel is authoritative)
-                if "max_rounds" in str(e).lower():
+                if "maximum tool-call rounds" in str(e).lower():
                     pytest.skip(f"1.5B hallucination max_rounds for chat, not counted for 100% files/window: {e}")
                 raise
         finally:
             reg.stop_all()
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
 def test_tool_call_parsing():
     with tempfile.TemporaryDirectory() as tmp:
@@ -62,13 +64,14 @@ def test_tool_call_parsing():
                 r = ctx.plugins["agent_loop"].run("Create a file test.txt with content hello world")
                 assert isinstance(r, str) and len(r) > 0
             except Exception as e:
-                if "max_rounds" in str(e).lower():
+                if "maximum tool-call rounds" in str(e).lower():
                     pytest.skip(f"1.5B flaky max_rounds for file create, deterministic test is authoritative: {e}")
                 raise
         finally:
             reg.stop_all()
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
 def test_agent_loop_with_file_tool():
     with tempfile.TemporaryDirectory() as tmp:
@@ -89,13 +92,14 @@ def test_agent_loop_with_file_tool():
                 if f.exists():
                     assert "hello" in f.read_text(encoding="utf-8").lower()
             except Exception as e:
-                if "max_rounds" in str(e).lower():
+                if "maximum tool-call rounds" in str(e).lower():
                     pytest.skip(f"1.5B flaky max_rounds for file tool, deterministic FakeModel covers 100% metric: {e}")
                 raise
         finally:
             reg.stop_all()
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _ollama_available(), reason="Ollama not running")
 def test_event_logging_with_real_model():
     with tempfile.TemporaryDirectory() as tmp:
@@ -115,7 +119,7 @@ def test_event_logging_with_real_model():
                 types = {e.type for e in events}
                 assert {"session.start", "user.message", "assistant.message"}.issubset(types)
             except Exception as e:
-                if "max_rounds" in str(e).lower():
+                if "maximum tool-call rounds" in str(e).lower():
                     pytest.skip(f"1.5B flaky max_rounds for event logging: {e}")
                 raise
         finally:

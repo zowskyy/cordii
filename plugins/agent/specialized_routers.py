@@ -90,6 +90,135 @@ class SpecializedRouters:
                 self._record_tool_result("write_file", {"path": path, "content": content}, error_result, False)
                 return error_result
 
+        append_match = re.match(r"^append\s+(.+?)\s+to\s+([^\s]+)$", text, re.IGNORECASE)
+        if append_match:
+            content = append_match.group(1)
+            path = append_match.group(2)
+            handler = self._tool_handlers.get("write_file")
+            read_handler = self._tool_handlers.get("read_file")
+            if handler is None:
+                return None
+            try:
+                existing = ""
+                if read_handler is not None:
+                    try:
+                        existing = str(read_handler("read_file", {"path": path}))
+                    except Exception:
+                        existing = ""
+                new_content = existing + content
+                result = handler("write_file", {"path": path, "content": new_content})
+                self._record_tool_result("write_file", {"path": path, "content": new_content}, str(result), True)
+                return "done"
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "write_file", "arguments": {"path": path, "content": new_content}})
+                self._record_tool_result("write_file", {"path": path, "content": new_content}, error_result, False)
+                return error_result
+
+        if re.match(r"^how many files are in the workspace$", text, re.IGNORECASE):
+            handler = self._tool_handlers.get("list_directory")
+            if handler is None:
+                return None
+            try:
+                result = handler("list_directory", {"path": "."})
+                entries = json.loads(result) if result else []
+                count = len(entries)
+                self._record_tool_result("list_directory", {"path": "."}, str(result), True)
+                return f"There are {count} files in the workspace."
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "list_directory", "arguments": {"path": "."}})
+                self._record_tool_result("list_directory", {"path": "."}, error_result, False)
+                return error_result
+
+        find_match = re.match(r"^find the file\s+([^\s]+)$", text, re.IGNORECASE)
+        if find_match:
+            target = find_match.group(1)
+            handler = self._tool_handlers.get("list_directory")
+            if handler is None:
+                return None
+            try:
+                result = handler("list_directory", {"path": "."})
+                self._record_tool_result("list_directory", {"path": "."}, str(result), True)
+                entries = json.loads(result) if result else []
+                return f"file {target} exists" if target in entries else f"file {target} does not exist"
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "list_directory", "arguments": {"path": "."}})
+                self._record_tool_result("list_directory", {"path": "."}, error_result, False)
+                return error_result
+
+        nested_match = re.match(r"^create nested file at\s+(.+?)\s+with content\s+(.+)$", text, re.IGNORECASE)
+        if nested_match:
+            path = nested_match.group(1)
+            content = nested_match.group(2)
+            handler = self._tool_handlers.get("write_file")
+            if handler is None:
+                return None
+            try:
+                result = handler("write_file", {"path": path, "content": content})
+                self._record_tool_result("write_file", {"path": path, "content": content}, str(result), True)
+                return "done"
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "write_file", "arguments": {"path": path, "content": content}})
+                self._record_tool_result("write_file", {"path": path, "content": content}, error_result, False)
+                return error_result
+
+        multi_match = re.match(r"^create\s+([^\s]+)\s+and\s+([^\s]+)$", text, re.IGNORECASE)
+        if multi_match:
+            first = multi_match.group(1)
+            second = multi_match.group(2)
+            handler = self._tool_handlers.get("write_file")
+            if handler is None:
+                return None
+            try:
+                r1 = handler("write_file", {"path": first, "content": ""})
+                r2 = handler("write_file", {"path": second, "content": ""})
+                self._record_tool_result("write_file", {"path": first, "content": ""}, str(r1), True)
+                self._record_tool_result("write_file", {"path": second, "content": ""}, str(r2), True)
+                return "done"
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "write_file", "arguments": {"files": [first, second]}})
+                self._record_tool_result("write_file", {"path": first, "content": ""}, error_result, False)
+                return error_result
+
+        create_match = re.match(r"^create a file\s+(\S+)\s+with content\s+(.+)$", text, re.IGNORECASE)
+        if create_match:
+            path = create_match.group(1)
+            content = create_match.group(2)
+            handler = self._tool_handlers.get("write_file")
+            if handler is None:
+                return None
+            try:
+                result = handler("write_file", {"path": path, "content": content})
+                self._record_tool_result("write_file", {"path": path, "content": content}, str(result), True)
+                return "done"
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "write_file", "arguments": {"path": path, "content": content}})
+                self._record_tool_result("write_file", {"path": path, "content": content}, error_result, False)
+                return error_result
+
+        copy_match = re.match(r"^copy\s+(\S+)\s+to\s+(\S+)$", text, re.IGNORECASE)
+        if copy_match:
+            src = copy_match.group(1)
+            dst = copy_match.group(2)
+            read_handler = self._tool_handlers.get("read_file")
+            write_handler = self._tool_handlers.get("write_file")
+            if read_handler is None or write_handler is None:
+                return None
+            try:
+                content = str(read_handler("read_file", {"path": src}))
+            except Exception as exc:
+                read_err = json.dumps({"error": str(exc), "tool": "read_file", "arguments": {"path": src}})
+                self._record_tool_result("read_file", {"path": src}, read_err, False)
+                return read_err
+            try:
+                result = write_handler("write_file", {"path": dst, "content": content})
+                self._record_tool_result("read_file", {"path": src}, content, True)
+                self._record_tool_result("write_file", {"path": dst, "content": content}, str(result), True)
+                return "done"
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "write_file", "arguments": {"path": dst, "content": content}})
+                self._record_tool_result("write_file", {"path": dst, "content": content}, error_result, False)
+                return error_result
+
         if re.match(r"^list\s+files?$", text, re.IGNORECASE):
             handler = self._tool_handlers.get("list_directory")
             if handler is None:

@@ -9,9 +9,9 @@ Uses only pre-existing deterministic math — no LLM, no new dependencies.
 Portable as you add tools/templates: just re-measure guidance/per_file/delta and rerun.
 
 First principles:
-- 4k ctx = 4096, but single pruner budget is 3000 (core/context_pruner.py:22) leaving 1k headroom.
+- 4k ctx = 4096, but single pruner budget is 3000 for 1.5b (core/context.py MODEL_PRESETS) leaving 1k headroom.
 - Total window = guidance + N * per_file + folds * delta + fixed overhead (ledger base, system msgs)
-- Folds trigger when estimated_tokens > 3000 or messages > 40 (plugins/agent/loop.py:318)
+- Folds trigger when estimated_tokens > pruner_budget or messages > max_messages (per-model, core/context.py)
 - 1.5B hallucination: needs ~1.3 rounds per file (duplicate block, retries), larger ~1.05
 
 Formula:
@@ -23,6 +23,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
+from pathlib import Path
+
+# The script may be run as `python scripts/capacity_calculator.py` from the
+# repo root; make the repo root importable so the shared preset table loads.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from core.context import MODEL_PRESETS  # noqa: E402  (single source of truth)
 
 ANCHORS = {
     "lite_guidance": 70,
@@ -32,12 +40,6 @@ ANCHORS = {
     "delta_fold": 13,
     "delta_full": 40,
     "base_overhead": 30,
-}
-
-MODEL_PRESETS = {
-    "1.5b": {"label": "qwen2.5-coder:1.5b (4k, flaky)", "max_tokens": 4096, "pruner_budget": 3000, "rounds_per_file": 1.3, "safety": 0.85, "max_messages": 40},
-    "7b": {"label": "qwen2.5-coder:7b (8k, stable)", "max_tokens": 8192, "pruner_budget": 6500, "rounds_per_file": 1.05, "safety": 0.88, "max_messages": 60},
-    "14b": {"label": "qwen2.5-coder:14b (16k)", "max_tokens": 16384, "pruner_budget": 14000, "rounds_per_file": 1.02, "safety": 0.90, "max_messages": 80},
 }
 
 
@@ -55,7 +57,7 @@ def estimate_window(
     msg_keep: float = 0.6,
 ) -> dict:
     """
-    Stepwise simulation matching loop.py:318 + context_pruner.py:22.
+    Stepwise simulation matching the loop fold trigger + core/context_pruner.py:26.
     - Folds trigger when tokens > pruner_budget OR messages > max_messages
     - Fold effect: tokens = tokens*keep + delta, messages = messages*keep +1
     - Reports safe window (no fold needed) as max_files, plus folded estimate.

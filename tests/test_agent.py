@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 
 from core.context import Context
+from core.messages import Message
 from core.plugin import Plugin
+from core.reality import RealityProjector
 from core.registry import PluginRegistry
-from plugins.agent.loop import AgentLoop
+from plugins.agent.loop import AgentLoop, TOKEN_BUDGET
 from plugins.core.event_logger import EventLogger
 from plugins.tools.file import FileTools
 
@@ -94,3 +96,96 @@ def test_agent_emits_events(tmp_path):
     types = [e.type for e in ctx.plugins["event_log"].get_session_events(ctx.plugins["continuity"].session_id)]
     assert {"session.start", "user.message", "tool.result"}.issubset(types)
     reg.stop_all()
+
+
+class CapturingModel(Plugin):
+    name = "ollama_model"
+    dependencies = ()
+
+    def __init__(self):
+        super().__init__()
+        self.seen: list = []
+
+    def chat(self, messages, tools):
+        self.seen.append(list(messages))
+        return Message("assistant", "done")
+
+
+def test_agent_lite_uses_envelope(tmp_path):
+    ctx = Context(config={"profile": "lite", "workspace": str(tmp_path)})
+    reg = PluginRegistry(ctx)
+    reg.register(EventLogger(tmp_path / "test.db"))
+    model = CapturingModel()
+    reg.register(model)
+    reg.register(FileTools(tmp_path))
+    reg.register(AgentLoop(max_rounds=3))
+    reg.start_all()
+    try:
+        result = ctx.plugins["agent_loop"].run("hello")
+        assert result == "done"
+        loop = ctx.plugins["agent_loop"]
+        fed = model.seen[-1]
+        # Invariant 1: lite feeds the compiled envelope, never the mutable cache.
+        assert fed is not ctx.messages
+        assert [m.role for m in fed] == ["system", "user"]
+        assert fed[0].role == "system"
+        assert fed[0].content == loop._system_prompt
+        assert fed[1].role == "user"
+        assert "hello" in fed[1].content
+        # Invariant 3: compilation is deterministic over (log, manifest, assets).
+        event_log = ctx.plugins["event_log"]
+        sid = loop._get_session_id()
+        a = RealityProjector(event_log).compile_request(sid, loop._manifest, loop._system_prompt, loop._tool_schemas, TOKEN_BUDGET)
+        b = RealityProjector(event_log).compile_request(sid, loop._manifest, loop._system_prompt, loop._tool_schemas, TOKEN_BUDGET)
+        assert a.full_request_hash == b.full_request_hash
+        assert a.request_prefix_hash == b.request_prefix_hash
+    finally:
+        reg.stop_all()
+
+
+def test_multi_domain_llm_fallback_gated_by_profile_and_flag():
+    """P0 zero-token guarantee: the multi-domain LLM fallback for unresolved
+    fragments must run ONLY in the full profile AND with --enable-semantic-router.
+    Otherwise the multi-domain path is abandoned (query falls through to the
+    deterministic routers + agent loop) and _call_llm_directly is never called."""
+    from plugins.agent.multi_domain_router import DomainResult, MultiDomainResult
+    from plugins.agent.query_splitter import Fragment
+
+    class _StubMultiDomain:
+        def route_multi(self, text, ctx):
+            return MultiDomainResult(
+                results=[
+                    DomainResult(fragment=Fragment(text="derivative", domain="math"), domain="math", response="2*x"),
+                    DomainResult(fragment=Fragment(text="pizza", domain="general"), domain="general", response=None),
+                ],
+                has_unresolved=True,
+            )
+
+    def make_loop(config):
+        loop = AgentLoop()
+        loop.register(Context(config=config))
+        loop._multi_domain_router = _StubMultiDomain()
+        loop._aggregator = object()
+        routed = []
+        loop._call_llm_directly = lambda text: (routed.append(text) or "llm-answer")
+        return loop, routed
+
+    query = "What is the derivative of x squared? And how is pizza made?"
+
+    # lite (default profile): no routing LLM, multi-domain abandoned
+    loop, routed = make_loop({"profile": "lite"})
+    loop._try_multi_domain(query)
+    assert routed == []
+    assert loop._multi_domain_results == []
+
+    # full without flag: still no routing LLM
+    loop, routed = make_loop({"profile": "full"})
+    loop._try_multi_domain(query)
+    assert routed == []
+    assert loop._multi_domain_results == []
+
+    # full + explicit flag: fallback allowed
+    loop, routed = make_loop({"profile": "full", "semantic_router_enabled": True})
+    loop._try_multi_domain(query)
+    assert routed == ["pizza"]
+    assert len(loop._multi_domain_results) == 2

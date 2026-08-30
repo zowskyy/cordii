@@ -4,7 +4,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 
 # Event type constants
@@ -12,6 +12,7 @@ SESSION_START = "session.start"
 SESSION_END = "session.end"
 USER_MESSAGE = "user.message"
 ASSISTANT_MESSAGE = "assistant.message"
+SYSTEM_MESSAGE = "system.message"
 TOOL_INVOKED = "tool.invoked"
 TOOL_RESULT = "tool.result"
 TOOL_ERROR = "tool.error"
@@ -21,6 +22,43 @@ GEN_START = "gen.start"
 GEN_COMPLETE = "gen.complete"
 GEN_SENT = "gen.sent"
 STEP_TRACE = "step.trace"
+
+
+EventType = Literal[
+    "session.start",
+    "session.end",
+    "user.message",
+    "assistant.message",
+    "system.message",
+    "tool.invoked",
+    "tool.result",
+    "tool.error",
+    "model.requested",
+    "model.responded",
+    "manifest_bound",
+    "compaction_checkpoint",
+    "context_pruned",
+    "approval_granted",
+    "task.start",
+    "task.end",
+    "step.trace",
+]
+
+
+@dataclass
+class Manifest:
+    """Resolved runtime binding for a projection epoch.
+
+    The manifest pins the assets the compiler C consumes (tool schemas, prompt
+    template, serializer version, capacity budget) to immutable identities so a
+    request is reproducible from (log, manifest, policy) alone.
+    """
+    digest: str
+    tool_schema_hash: str
+    prompt_hash: str
+    serializer_version: str = "v1"
+    profile: str = "lite"
+    budget_tokens: int = 3000
 
 
 @dataclass
