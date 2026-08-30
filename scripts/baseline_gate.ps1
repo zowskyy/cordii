@@ -9,10 +9,11 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $basetemp = Join-Path $repoRoot "tmp\pytest_cordiiv2"
 
-function Invoke-Pytest($Args) {
-    $cmd = "pytest --basetemp `"$basetemp`" $Args -q"
+function Invoke-Pytest([string[]]$ExtraArgs) {
+    $argsList = @("--basetemp", $basetemp) + $ExtraArgs + @("-q")
+    $cmd = "pytest " + ($argsList -join ' ')
     Write-Host ">>> $cmd"
-    $output = & pytest --basetemp $basetemp @($Args.Split(' ')) -q
+    $output = & pytest @argsList
     Write-Host $output
     if ($LASTEXITCODE -ne 0) {
         throw "pytest failed with exit code $LASTEXITCODE"
@@ -21,7 +22,7 @@ function Invoke-Pytest($Args) {
 }
 
 Write-Host "==> Deterministic gate"
-$det = Invoke-Pytest ""
+$det = Invoke-Pytest @()
 if ($det -notmatch "(\d+) passed") {
     throw "Could not parse passed count from deterministic output"
 }
@@ -33,7 +34,7 @@ if ($passed -lt 276) {
 
 if (-not $SkipLive) {
     Write-Host "`n==> Live integration gate"
-    $live = Invoke-Pytest "--live -k integration"
+    $live = Invoke-Pytest @("--live", "-k", "integration")
     if ($live -notmatch "(\d+) passed") {
         throw "Could not parse passed count from live output"
     }
