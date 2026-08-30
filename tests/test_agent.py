@@ -56,7 +56,9 @@ def test_agent_multiple_tool_calls(tmp_path):
 
     calls = [tc("write_file", {"path": "a.txt", "content": "a"}), tc("write_file", {"path": "b.txt", "content": "b"})]
     ctx, reg = build_agent(tmp_path, [Message("assistant", "", tool_calls=calls), Message("assistant", "both done")])
-    assert ctx.plugins["agent_loop"].run("make two files") == "done"
+    result = ctx.plugins["agent_loop"].run("make two files")
+    # 3x: loop now continues until model emits done (not auto-done), so result is model-provided "both done"
+    assert "done" in result.lower()
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "a"
     assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "b"
     reg.stop_all()

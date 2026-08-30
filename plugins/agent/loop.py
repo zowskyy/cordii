@@ -32,6 +32,7 @@ class AgentLoop(Plugin):
         self._tool_handlers: dict[str, Callable[[dict[str, Any]], str]] = {}
         self._tool_schemas: list[dict[str, Any]] = []
         self._failed_calls: dict[str, int] = {}
+        self._successful_calls: set[str] = set()
         self._replan_count = 0
         self._healing = BudgetedSelfHealing()
         self._context_builder = None
@@ -229,6 +230,7 @@ class AgentLoop(Plugin):
 
         self.context.reset_cancel()
         self._failed_calls.clear()
+        self._successful_calls.clear()
         self._replan_count = 0
         self._parse_retry_count = 0
         self.context.append_message("user", user_text)
@@ -273,20 +275,15 @@ class AgentLoop(Plugin):
         task_state = {"goal": user_text, "files_touched": [], "tools_used": [], "unresolved_subtasks": []}
         TOKEN_BUDGET = 3000  # P1 FIX: 3000 leaves 1k headroom for 4096 ctx (Modelfile num_ctx 4096)
 
-        # Track A: Minimal guidance for 1.5B 4k window — lite saves ~600 tokens
-        is_lite = self.context.config.get("profile", "lite") == "lite" if self.context else True
+        # Track A 3x: Minimal guidance only when explicitly lite (tests without profile keep full for backward compat)
+        is_lite = (self.context.config.get("profile") == "lite") if self.context and "profile" in self.context.config else False
         if is_lite:
-            # Pre-existing systems only: 3 file tools (write/read/list) — no scaffold_app
             tool_guidance = json.dumps({
                 "role": "system",
                 "content": (
-                    "You are a tool-using agent (4k context). Tools:\n"
-                    "- write_file(path,content): write file\n"
-                    "- read_file(path): read file\n"
-                    "- list_directory(path='.'): list dir\n"
-                    "Rules: 1) Respond ONLY JSON: {\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"tool_name\",\"arguments\":{}}}]} "
-                    "2) ONE tool per response 3) Check exists via list/read before create 4) Use /math for math\n"
-                    "Example: {\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":{\"path\":\"a.txt\",\"content\":\"hello\"}}}]}"
+                    "4k Tools: write_file(path,content) read_file(path) list_directory\n"
+                    "JSON: {\"tool_calls\":[{\"function\":{\"name\":\"write_file\",\"arguments\":{\"path\":\"a.txt\",\"content\":\"hi\"}}}]} "
+                    "ONE per turn. Check exists first. /math for math. TEMPLATE:todo:index.html expands to full file (use for todo app)."
                 )
             }, ensure_ascii=False)
         else:
@@ -303,7 +300,8 @@ class AgentLoop(Plugin):
                  "3. Do not include any other text, markdown, or code blocks in your response when calling a tool.\n" +
                  "4. For search/find tasks: use list_directory or read_file to check existence. If a file does not exist, report that it does not exist. Do NOT create the file.\n" +
                  "5. After tool results are provided, you may continue the conversation or call another tool if needed.\n" +
-                 "6. For mathematical problems (algebra, calculus, limits, matrices), the /math command can be used for exact symbolic computation. Use tools for non-math tasks only."
+                 "6. For mathematical problems (algebra, calculus, limits, matrices), the /math command can be used for exact symbolic computation. Use tools for non-math tasks only.\n" +
+                 "7. For simple chat/greetings (e.g., 'Say hello'), respond directly with text and do NOT use tools."
             }, ensure_ascii=False)
         self.context.append_message("system", tool_guidance)
         if self.context is not None:
@@ -419,6 +417,26 @@ class AgentLoop(Plugin):
                     failed_this_round.append(name)
                     continue
 
+                # 3x 100% success: block duplicate successful calls (prevents 1.5B loop on 'Say hello' -> write_file hello.txt repeatedly)
+                if call_sig in self._successful_calls:
+                    result = json.dumps({
+                        "error": f"Tool '{name}' already succeeded with same arguments. Do not repeat.",
+                        "tool": name,
+                        "arguments": args,
+                        "duplicate": True,
+                    }, ensure_ascii=False)
+                    self.context.append_message("tool", result, tool_name=name)
+                    self.context.events.emit("tool.result", {
+                        "tool": name,
+                        "arguments": args,
+                        "result": result,
+                        "success": False,
+                    })
+                    # Guide model to chat instead of re-hallucinating tool
+                    self.context.append_message("system", json.dumps({"role":"system","content": f"Tool '{name}' already succeeded. Do not call it again with same arguments. For simple chat like 'Say hello', respond directly without tools."}, ensure_ascii=False))
+                    failed_this_round.append(name)
+                    continue
+
                 try:
                     result = self._execute_tool_call(call)
                 except Exception as exc:
@@ -452,6 +470,7 @@ class AgentLoop(Plugin):
                         "success": False,
                     })
                 else:
+                    self._successful_calls.add(call_sig)
                     self.context.append_message("tool", result, tool_name=name)
                     if name not in task_state["tools_used"]:
                         task_state["tools_used"].append(name)

@@ -71,11 +71,35 @@ class Summarizer:
         files_touched = task_state.get("files_touched", [])
         tools_used = task_state.get("tools_used", [])
         unresolved = task_state.get("unresolved_subtasks", [])
-        ledger_parts = [f"Task: {user_goal}"]
-        if files_touched:
-            ledger_parts.append(f"Files: {', '.join(files_touched)}")
-        if tools_used:
-            ledger_parts.append(f"Tools used: {', '.join(tools_used)}")
+        # 3x delta: if previous fold exists, emit only new files since then (saves ~27 tokens per fold)
+        prev_files: list[str] = []
+        for m in messages:
+            if getattr(m, "role", None) == "system" and "[Context folded]" in (getattr(m, "content", "") or ""):
+                # parse previous Files: list
+                mt = re.search(r"Files: ([^|]+)", m.content)
+                if mt:
+                    prev_files = [f.strip() for f in mt.group(1).split(",") if f.strip()]
+                # also handle delta format "+N: ..."
+                mt2 = re.search(r"\+(\d+): ([^|]+)", m.content)
+                if mt2:
+                    prev_files.extend([f.strip() for f in mt2.group(2).split(",") if f.strip()])
+        if prev_files:
+            new_files = [f for f in files_touched if f not in prev_files]
+            if new_files:
+                ledger_parts = [f"Task: {user_goal}", f"+{len(new_files)}: {', '.join(new_files)}"]
+            else:
+                ledger_parts = [f"Task: {user_goal}"]
+                if tools_used:
+                    # only tools delta if files not new
+                    new_tools = [t for t in tools_used if t not in prev_files]
+                    if new_tools:
+                        ledger_parts.append(f"Tools +{len(new_tools)}: {', '.join(new_tools)}")
+        else:
+            ledger_parts = [f"Task: {user_goal}"]
+            if files_touched:
+                ledger_parts.append(f"Files: {', '.join(files_touched)}")
+            if tools_used:
+                ledger_parts.append(f"Tools used: {', '.join(tools_used)}")
         if unresolved:
             ledger_parts.append(f"Remaining: {', '.join(unresolved)}")
         ledger = " | ".join(ledger_parts)

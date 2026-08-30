@@ -11,6 +11,17 @@ from core.plugin import Plugin
 class FileTools(Plugin):
     name = "file_tools"
 
+    # 3x deterministic templates — reuse via TEMPLATE: prefix, LLM sends short token, FileTools expands deterministically (pre-existing system)
+    TEMPLATES: dict[str, str] = {
+        "todo:index.html": '<!DOCTYPE html><html><head><link rel="stylesheet" href="style.css"></head><body><div id="app"><h1>Todo</h1><input id="input" placeholder="todo"><button onclick="add()">Add</button><ul id="list"></ul></div><script src="app.js"></script></body></html>',
+        "todo:app.js": 'let todos=[];function add(){let v=document.getElementById("input").value.trim();if(!v)return;todos.push(v);render();document.getElementById("input").value=""}function render(){let l=document.getElementById("list");l.innerHTML=todos.map((t,i)=>`<li>${t} <button onclick="todos.splice(${i},1);render()">x</button></li>`).join("")}',
+        "todo:style.css": 'body{font-family:sans-serif;background:#f5f5f5}#app{max-width:500px;margin:40px auto;background:white;padding:20px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1)}#input{width:70%;padding:8px}button{padding:8px 12px;margin-left:4px}',
+        "todo:crud.js": 'const store={items:[],add(t){this.items.push({id:Date.now(),text:t})},remove(id){this.items=this.items.filter(i=>i.id!==id)},list(){return this.items}};if(typeof module!=="undefined")module.exports=store;',
+        "landing:index.html": '<!DOCTYPE html><html><head><link rel="stylesheet" href="style.css"></head><body><header><h1>Landing</h1><p>Welcome</p><button>Get Started</button></header><script src="app.js"></script></body></html>',
+        "landing:app.js": 'document.querySelector("button").addEventListener("click",()=>alert("started"))',
+        "landing:style.css": 'header{text-align:center;padding:60px;background:#667eea;color:white}button{padding:12px 24px;border:none;border-radius:4px;background:white;color:#667eea}',
+    }
+
     def __init__(self, workspace: str | Path, *, max_read_bytes: int = 2 * 1024 * 1024, max_write_bytes: int = 2 * 1024 * 1024) -> None:
         super().__init__()
         self.workspace = Path(workspace).expanduser().resolve()
@@ -50,6 +61,21 @@ class FileTools(Plugin):
     def write_file(self, path: str, content: str) -> str:
         if not isinstance(content, str):
             raise ToolError("content must be a string.")
+        # 3x: TEMPLATE: expansion — LLM sends short token (e.g., TEMPLATE:todo:index.html), FileTools expands deterministically
+        if content.strip().startswith("TEMPLATE:"):
+            key = content.strip()[9:].strip()  # after "TEMPLATE:"
+            # support "todo:index.html" or "todo/app.js" -> normalize
+            key = key.replace("/", ":").replace("\\", ":")
+            expanded = self.TEMPLATES.get(key)
+            if expanded is None:
+                # fallback: try path-based lookup
+                # e.g., write_file path=index.html with content TEMPLATE:todo -> map to todo:index.html
+                alt = f"todo:{Path(path).name}"
+                expanded = self.TEMPLATES.get(alt)
+            if expanded is not None:
+                content = expanded
+            else:
+                raise ToolError(f"Unknown template: {key!r}. Available: {', '.join(self.TEMPLATES)}")
         if len(content.encode("utf-8")) > self.max_write_bytes:
             raise ToolError("Content exceeds write size limit.")
         target = self._resolve(path)

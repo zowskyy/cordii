@@ -21,9 +21,10 @@ class EpisodicMemory:
         self._event_log._conn.commit()
 
     def recall(self, session_id: str, query: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        q = "SELECT summary, tags, importance, created_at FROM episodic_memory WHERE session_id = ?" + (" AND summary LIKE ?" if query else "") + " ORDER BY importance DESC, created_at DESC LIMIT ?"
+        q = "SELECT summary, tags, importance, created_at, id FROM episodic_memory WHERE session_id = ?" + (" AND summary LIKE ?" if query else "") + " ORDER BY importance DESC, created_at DESC, id DESC LIMIT ?"
         p = (session_id, f"%{query}%", limit) if query else (session_id, limit)
-        return [{"summary": r[0], "tags": json.loads(r[1]) if r[1] else [], "importance": r[2], "created_at": r[3]} for r in self._event_log._conn.execute(q, p).fetchall()]
+        rows = self._event_log._conn.execute(q, p).fetchall()
+        return [{"summary": r[0], "tags": json.loads(r[1]) if r[1] else [], "importance": r[2], "created_at": r[3]} for r in rows]
 
     def decay(self, session_id: str, keep_limit: int = 100) -> None:
         rows = self._event_log._conn.execute(
