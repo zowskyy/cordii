@@ -48,7 +48,7 @@ python main.py --profile full --dry-run
 - Test additions that increase pass counts
 
 ## What must not change
-- Deterministic pass count dropping below **276** or skipped count exceeding **7**
+- Deterministic pass count dropping below **279** or skipped count exceeding **7**
 - Live integration pass count dropping below **4**
 - `lite` profile touching `semantic_router`, `embedding_model`, or any LLM fallback path
 - Calibration-specific literals spreading into plugin logic, routing, or pruning code

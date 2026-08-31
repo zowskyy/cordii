@@ -17,3 +17,9 @@ workspace/*
 benchmark_results.db
 benchmark_results.json
 metrics/*.jsonl
+logs/*
+!logs/.gitkeep
+web/client/.next/
+web/client/node_modules/
+web/client/.pytest_cache/
+web/client/next-env.d.ts
