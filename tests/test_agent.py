@@ -298,3 +298,33 @@ def test_agent_emits_turn_round_once_per_iteration(tmp_path):
         assert seen.count("turn.round") == 1
     finally:
         reg.stop_all()
+
+
+def test_duplicate_successful_tool_calls_are_filtered(tmp_path):
+    """P0 loop fix: when the model repeats a previously successful tool call,
+    the agent must filter it out before execution and guide the model to reply
+    with text instead, preventing max_rounds_exceeded loops."""
+    from core.messages import Message
+
+    tool_call = tc("write_file", {"path": "a.txt", "content": "hi"})
+    # First response: valid tool call. Second response: duplicate tool call.
+    # Third response: text reply after guidance.
+    ctx, reg = build_agent(
+        tmp_path,
+        [
+            Message("assistant", "", tool_calls=[tool_call]),
+            Message("assistant", "", tool_calls=[tool_call]),
+            Message("assistant", "already done"),
+        ],
+    )
+    try:
+        result = ctx.plugins["agent_loop"].run("hi")
+        assert result == "already done"
+        # Verify the file was written exactly once
+        assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hi"
+        # Verify we did not hit max_rounds_exceeded
+        tool_msgs = [m for m in ctx.messages if m.role == "tool"]
+        duplicate_errors = [m for m in tool_msgs if '"duplicate": true' in (m.content or "")]
+        assert duplicate_errors == []
+    finally:
+        reg.stop_all()

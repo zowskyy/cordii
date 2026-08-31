@@ -443,9 +443,53 @@ class AgentLoop(Plugin):
             parser = self.context.plugins.get("ollama_tool_call_parser") or self.context.plugins.get("tool_call_parser")
             if not tool_calls and parser is not None and response.content:
                 tool_calls = parser.parse(response, self._tool_schemas) or []
-            self.context.append_message("assistant", response.content, tool_calls=tool_calls)
+
+            # P0 FIX: Filter out duplicate-successful tool calls BEFORE appending assistant message.
+            # This prevents small models from copying their own prior tool calls in the context.
+            duplicate_filtered = False
+            if tool_calls:
+                filtered_calls = []
+                for call in tool_calls:
+                    sig = self._sig(call)
+                    if sig not in self._successful_calls:
+                        filtered_calls.append(call)
+
+                if not filtered_calls:
+                    # All tool calls are duplicates of previously successful ones.
+                    # Force a text-only assistant message and strong guidance, then continue
+                    # to the next round so the model can reply with text instead of tools.
+                    duplicate_filtered = True
+                    assistant_content = response.content or "Task already completed."
+
+                    guidance = json.dumps(
+                        {
+                            "role": "system",
+                            "content": (
+                                "You already completed the requested task successfully. "
+                                "Do not call any tools again. Respond with a short text message only."
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
+                    self.context.append_message("system", guidance)
+                    if self.context is not None:
+                        self.context.events.emit("system.message", {"content": guidance})
+
+                    # Skip tool execution for this round; model should respond with text on next round.
+                    tool_calls = []
+                else:
+                    tool_calls = filtered_calls
+                    assistant_content = response.content
+            else:
+                assistant_content = response.content
+
+            self.context.append_message("assistant", assistant_content, tool_calls=tool_calls)
             if self.context is not None:
-                self.context.events.emit("assistant.message", {"content": response.content, "tool_calls": tool_calls})
+                self.context.events.emit("assistant.message", {"content": assistant_content, "tool_calls": tool_calls})
+
+            if duplicate_filtered:
+                # Skip tool execution for this round; model should respond with text on next round.
+                continue
 
             if not tool_calls and self._parse_retry_count < 2 and response.content:
                 looks_like_tool_use = any(name.lower() in response.content.lower() for name in [s["function"]["name"] for s in self._tool_schemas])

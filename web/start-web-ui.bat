@@ -2,9 +2,7 @@
 chcp 65001 >nul
 title Cordi v2 Web UI
 
-set "ROOT=C:\Users\thewi\OneDrive\Desktop\cordiiv2\.kilo\worktrees\cubic-stealer"
-set "PYTHON=%ROOT%\web\server.py"
-set "NPM_DIR=%ROOT%\web\client"
+set "ROOT=%~dp0.."
 set "PORT=3081"
 
 echo [1/4] Checking Python...
@@ -24,13 +22,13 @@ if errorlevel 1 (
 )
 
 echo [3/4] Installing frontend dependencies...
-pushd "%NPM_DIR%"
+pushd "%ROOT%\web\client"
 call npm install --silent
 popd
 
 echo [4/4] Starting backend and frontend...
-start "Cordi v2 Backend" cmd /k "cd /d "%ROOT%" && python "%PYTHON%""
-start "Cordi v2 Frontend" cmd /k "cd /d "%NPM_DIR%" && npm run dev"
+start "Cordi v2 Backend" cmd /k "cd /d "%ROOT%" && python -m web.server"
+start "Cordi v2 Frontend" cmd /k "cd /d "%ROOT%\web\client" && npm run dev"
 
 echo.
 echo Waiting for frontend on port %PORT%...
