@@ -57,3 +57,22 @@ def test_session_events_endpoint_returns_streaming_response(client):
     response = client.get(f"/api/sessions/{session_id}/events", headers={"Accept": "text/event-stream"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+
+
+def test_file_explorer_lists_workspace(client):
+    response = client.get("/api/files", params={"path": str(Path("workspace").resolve())})
+    assert response.status_code == 200
+    data = response.json()
+    assert "files" in data
+    assert isinstance(data["files"], list)
+
+
+def test_file_explorer_reads_file(client):
+    target = Path("workspace").resolve() / "README.md"
+    if not target.exists():
+        pytest.skip("README.md not present in workspace")
+    response = client.get("/api/files/content", params={"path": str(target)})
+    assert response.status_code == 200
+    data = response.json()
+    assert "content" in data
+    assert len(data["content"]) > 0

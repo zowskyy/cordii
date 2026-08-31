@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -123,6 +124,29 @@ async def delete_session(session_id: str) -> dict[str, bool]:
     except KeyError:
         pass
     return {"ok": True}
+
+
+@app.get("/api/files")
+async def list_files(path: str = "workspace") -> dict[str, list[dict]]:
+    root = Path(path).resolve()
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+    entries = []
+    for entry in root.iterdir():
+        entries.append({
+            "name": entry.name,
+            "path": str(entry),
+            "kind": "dir" if entry.is_dir() else "file",
+        })
+    return {"files": sorted(entries, key=lambda e: (e["kind"] != "dir", e["name"]))}
+
+
+@app.get("/api/files/content")
+async def read_file(path: str) -> dict[str, str]:
+    file_path = Path(path).resolve()
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"content": file_path.read_text(encoding="utf-8", errors="replace")}
 
 
 if __name__ == "__main__":

@@ -74,6 +74,45 @@ def _session_id() -> str:
     return "sess_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
 
+def _persist_session(session: AgentSession) -> None:
+    state_file = session.workspace / ".cordiiv2_sessions.json"
+    try:
+        data = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+    except Exception:
+        data = {}
+    data[session.id] = {
+        "workspace": str(session.workspace),
+        "model": session.model,
+        "profile": session.profile,
+        "enable_semantic_router": session.enable_semantic_router,
+        "db_path": str(session.db_path),
+    }
+    state_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _load_sessions(workspace: str) -> list[AgentSession]:
+    state_file = Path(workspace).resolve() / ".cordiiv2_sessions.json"
+    if not state_file.exists():
+        return []
+    try:
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    sessions = []
+    for sid, meta in data.items():
+        session = AgentSession(
+            id=sid,
+            workspace=Path(meta["workspace"]).resolve(),
+            model=meta.get("model", "qwen2.5-coder:1.5b"),
+            profile=meta.get("profile", "lite"),
+            enable_semantic_router=meta.get("enable_semantic_router", False),
+            db_path=Path(meta["db_path"]).resolve(),
+        )
+        _sessions[sid] = session
+        sessions.append(session)
+    return sessions
+
+
 def create_session(
     workspace: str = "workspace",
     model: str = "qwen2.5-coder:1.5b",
@@ -93,6 +132,7 @@ def create_session(
         db_path=db,
     )
     _sessions[session_id] = session
+    _persist_session(session)
     return session
 
 
@@ -110,3 +150,11 @@ def remove_session(session_id: str) -> None:
     session = _sessions.pop(session_id, None)
     if session is not None:
         session.stop()
+        state_file = session.workspace / ".cordiiv2_sessions.json"
+        if state_file.exists():
+            try:
+                data = json.loads(state_file.read_text(encoding="utf-8"))
+                data.pop(session_id, None)
+                state_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
