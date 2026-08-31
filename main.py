@@ -80,7 +80,15 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         "file_tools": {"workspace": workspace},
     }
 
-    # === LITE CORE: always on ===
+    # === LITE CORE: 19 plugins total ===
+    # Event log: EventLogger
+    # Model + parser: OllamaModel, OllamaToolCallParser
+    # Tools: FileTools
+    # Deterministic pool (8): MathRouter, SymbolicEngine, MathVerifier, MathPipeline,
+    #                         DateTimeRouter, DateTimeEngine, UnitsRouter, UnitsEngine
+    # Routing layer (4): ParameterExtractor, QuerySplitter, MultiDomainRouter, AggregateResponse
+    # Pruner + loop + UI: ContextPrunerPlugin, AgentLoop, TerminalUI
+    # Total: 1 + 2 + 1 + 8 + 4 + 3 = 19
     reg.register(EventLogger(db_path))
     reg.register(OllamaModel(**plugin_config["ollama_model"]))
     reg.register(FileTools(workspace))
@@ -136,6 +144,21 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         # Semantic router not registered in lite at all — zero embedding cost
         pass
 
+    expected_lite = 21
+    expected_full = 44
+    actual = len(ctx.plugins)
+    if profile == "lite":
+        assert actual == expected_lite, f"Lite profile: expected {expected_lite} plugins, got {actual}"
+        assert "semantic_router" not in ctx.plugins, "SemanticRouter registered in lite profile"
+    elif profile == "full":
+        assert actual == expected_full, f"Full profile: expected {expected_full} plugins, got {actual}"
+        if enable_semantic_router:
+            assert ctx.plugins["semantic_router"].enabled is True, "SemanticRouter should be enabled"
+        else:
+            assert ctx.plugins["semantic_router"].enabled is False, "SemanticRouter should be disabled"
+
+    print(f"[startup] profile={profile}, plugins={actual}, model={model_name}, semantic_router={enable_semantic_router}")
+
     reg.start_all()
     return ctx, reg
 
@@ -148,10 +171,15 @@ def main() -> int:
     p.add_argument("--db", default="continuity/continuity.db", help="SQLite event log path")
     p.add_argument("--profile", default="lite", choices=["lite", "full"], help="lite=19 plugins (default, saves tokens), full=42 plugins (debug)")
     p.add_argument("--enable-semantic-router", action="store_true", help="Enable semantic router (embedding cost, off by default)")
+    p.add_argument("--dry-run", action="store_true", help="Build app, assert invariants, and exit without running UI")
     args = p.parse_args()
     workspace = Path(args.workspace).expanduser().resolve()
     db_path = Path(args.db).expanduser().resolve()
     ctx, reg = build_application(workspace, args.model, args.ollama_url, db_path, profile=args.profile, enable_semantic_router=args.enable_semantic_router)
+    if args.dry_run:
+        print(f"Dry run OK: profile={args.profile}, plugins={len(ctx.plugins)}")
+        reg.stop_all()
+        return 0
     try:
         ctx.plugins["terminal_ui"].run()
     finally:
