@@ -13,6 +13,50 @@ class PruningStrategy:
         raise NotImplementedError()
 
 
+class TokenFirstStrategy(PruningStrategy):
+    name = "token_first"
+
+    def prune(self, messages: list[Message], max_messages: int, token_budget: int, task_state: dict[str, object] | None = None) -> list[Message]:
+        pruned = list(messages)
+        while Summarizer.estimate_tokens(str(pruned)) > token_budget and len(pruned) > 3:
+            candidates = [m for i, m in enumerate(pruned) if i > 0 and i < len(pruned) - 2]
+            if not candidates:
+                break
+            worst = min(candidates, key=lambda m: self._score(m, pruned.index(m), len(pruned), task_state))
+            pruned.remove(worst)
+        return pruned
+
+    def _score(self, msg: Message, index: int, total: int, task_state: dict[str, object] | None) -> float:
+        role = msg.role or ""
+        if role == "assistant" and msg.tool_calls:
+            return 1.5
+        if role == "user":
+            return 1.0
+        if role == "tool":
+            try:
+                import json
+                payload = json.loads(msg.content)
+                if payload.get("success"):
+                    return 0.8
+            except (json.JSONDecodeError, AttributeError):
+                pass
+            return 0.4
+        if role == "system":
+            return 0.6
+        recency = index / max(total, 1)
+        return 0.1 + recency
+
+
+class MessageFirstStrategy(PruningStrategy):
+    name = "message_first"
+
+    def prune(self, messages: list[Message], max_messages: int, token_budget: int, task_state: dict[str, object] | None = None) -> list[Message]:
+        if len(messages) <= max_messages:
+            return list(messages)
+        keep = max_messages
+        return messages[-keep:]
+
+
 class HybridPruningStrategy(PruningStrategy):
     name = "hybrid"
 
@@ -64,3 +108,26 @@ class HybridPruningStrategy(PruningStrategy):
             return 0.8
         recency = index / max(total, 1)
         return 0.1 + recency
+
+
+class StrategyRegistry:
+    _strategies: dict[str, PruningStrategy] = {}
+
+    @classmethod
+    def register(cls, strategy: PruningStrategy) -> None:
+        cls._strategies[strategy.name] = strategy
+
+    @classmethod
+    def get(cls, name: str) -> PruningStrategy:
+        if name not in cls._strategies:
+            raise KeyError(f"Unknown pruning strategy: {name}")
+        return cls._strategies[name]
+
+    @classmethod
+    def names(cls) -> list[str]:
+        return list(cls._strategies.keys())
+
+
+StrategyRegistry.register(TokenFirstStrategy())
+StrategyRegistry.register(MessageFirstStrategy())
+StrategyRegistry.register(HybridPruningStrategy())
