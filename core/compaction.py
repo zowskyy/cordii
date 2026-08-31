@@ -7,11 +7,15 @@ from core.summarizer import Summarizer
 
 
 class PruningStrategy:
+    name = "base"
+
     def prune(self, messages: list[Message], max_messages: int, token_budget: int, task_state: dict[str, object] | None = None) -> list[Message]:
         raise NotImplementedError()
 
 
 class HybridPruningStrategy(PruningStrategy):
+    name = "hybrid"
+
     def prune(self, messages: list[Message], max_messages: int, token_budget: int, task_state: dict[str, object] | None = None) -> list[Message]:
         pruned = list(messages)
 

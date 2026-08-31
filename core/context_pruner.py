@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from core.compaction import HybridPruningStrategy
+from core.compaction import HybridPruningStrategy, PruningStrategy
 from core.messages import Message
 from core.summarizer import Summarizer
 
@@ -25,10 +25,10 @@ class ContextPruner:
     Now single pruner is authoritative; Summarizer.fold_messages delegates here.
     """
 
-    def __init__(self, max_messages: int = 40, token_budget: int = 3000):
+    def __init__(self, max_messages: int = 40, token_budget: int = 3000, strategy: PruningStrategy | None = None):
         self.max_messages = max_messages
         self.token_budget = token_budget
-        self._strategy = HybridPruningStrategy()
+        self._strategy = strategy or HybridPruningStrategy()
 
     def prune(self, messages: list[Message], task_state: dict[str, Any] | None = None) -> PrunedContext:
         before_tokens = Summarizer.estimate_tokens(str(messages))
@@ -41,7 +41,7 @@ class ContextPruner:
         )
 
         removed = len(messages) - len(pruned)
-        strategy = "hybrid" if removed > 0 else "none"
+        strategy = getattr(self._strategy, "name", type(self._strategy).__name__) if removed > 0 else "none"
 
         return PrunedContext(
             messages=pruned,
