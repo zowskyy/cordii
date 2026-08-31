@@ -26,7 +26,7 @@ Lite-first local agent for 1.5B models (qwen2.5-coder:1.5b). Pool philosophy: de
 
 ## Milestone: v2.0-baseline-stable (2026-08-30)
 - **Model:** `qwen2.5-coder:1.5b`
-- **Deterministic suite:** 276 passed, 7 skipped
+- **Deterministic suite:** 279 passed, 7 skipped
 - **Live integration:** 4/4 passed in ~9.47s
 - **Validated invariants:**
   - 1.5B baseline stable
@@ -45,7 +45,7 @@ Lite-first local agent for 1.5B models (qwen2.5-coder:1.5b). Pool philosophy: de
 - SemanticRouter embeddings cost tokens when enabled (full + `--enable-semantic-router` only); lite keeps it OFF.
 
 ## Verification
-- **Hard gate (deterministic):** `pytest --basetemp C:\tmp\pytest_cordiiv2` → 276 passed, 7 skipped
+- **Hard gate (deterministic):** `pytest --basetemp C:\tmp\pytest_cordiiv2` → 279 passed, 7 skipped
 - **Live (confirmatory):** `pytest --basetemp C:\tmp\pytest_cordiiv2 --live` → 280 passed, 3 skipped (4/4 live 1.5B integration tests green)
 - **gitignore gate:** `git check-ignore` confirms `.cache/*`, `continuity/*.db`, `*.db`, `workspace/*` ignored (`.gitignore`).
 - **Baseline gate:** `powershell -File scripts/baseline_gate.ps1` (re-runs deterministic + live gates with assertions).

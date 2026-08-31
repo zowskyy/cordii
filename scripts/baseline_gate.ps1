@@ -10,7 +10,7 @@ $basetemp = "C:\tmp\pytest_cordiiv2"
 $logPath = Join-Path $PSScriptRoot "..\logs\baseline_gate.log"
 
 # Thresholds (update when the baseline contract changes)
-$MIN_PASSED = 276
+$MIN_PASSED = 279
 $MAX_SKIPPED = 7
 $MIN_LIVE_PASSED = 4
 

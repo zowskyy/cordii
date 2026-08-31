@@ -33,7 +33,7 @@ python main.py --profile full --dry-run
 
 | Check | Expected |
 |---|---|
-| Deterministic tests | ≥276 passed, ≤7 skipped |
+| Deterministic tests | ≥279 passed, ≤7 skipped |
 | Live integration | ≥4 passed on `qwen2.5-coder:1.5b` |
 | Lite plugins | 21 |
 | Full plugins | 44 |

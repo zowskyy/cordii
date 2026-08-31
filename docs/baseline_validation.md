@@ -12,7 +12,7 @@
 ```powershell
 pytest --basetemp C:\tmp\pytest_cordiiv2 -q
 ```
-**Expected:** 276 passed, 7 skipped
+**Expected:** 279 passed, 7 skipped
 
 ### Live integration suite
 ```powershell

@@ -142,7 +142,8 @@ class EventBus:
         event = Event(type=event_type, payload=payload or {})
         with self._lock:
             handlers = list(self._listeners.get(event_type, []))
-        for handler in handlers:
+            wildcards = list(self._listeners.get("*", []))
+        for handler in handlers + wildcards:
             try:
                 handler(event)
             except Exception as exc:
