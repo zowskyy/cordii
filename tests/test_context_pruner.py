@@ -59,7 +59,7 @@ def test_pruner_returns_metrics():
     assert isinstance(result, PrunedContext)
     assert result.removed_count > 0
     assert result.estimated_tokens_after < result.estimated_tokens_before
-    assert result.strategy == "importance"
+    assert result.strategy == "hybrid"
 
 
 def test_pruner_token_pass_when_under_message_limit():
@@ -83,7 +83,7 @@ def test_pruner_token_pass_when_under_message_limit():
     result = pruner.prune(messages)
     assert result.estimated_tokens_after <= 1000
     assert result.removed_count == 1
-    assert result.strategy == "token"
+    assert result.strategy == "hybrid"
     assert result.messages[0].role == "system"        # leading system protected
     assert result.messages[-1].content == "done"      # two most recent protected
     assert not any("x" * 100 in (m.content or "") for m in result.messages)
