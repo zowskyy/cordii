@@ -16,3 +16,4 @@ workspace/*
 !workspace/.gitkeep
 benchmark_results.db
 benchmark_results.json
+metrics/*.jsonl
