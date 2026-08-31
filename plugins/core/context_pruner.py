@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.context import calibration_from_context
+from core.calibration import calibration_from_context
 from core.context_pruner import ContextPruner
 from core.plugin import Plugin
 

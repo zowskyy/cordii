@@ -30,7 +30,7 @@ from pathlib import Path
 # repo root; make the repo root importable so the shared preset table loads.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.context import MODEL_PRESETS  # noqa: E402  (single source of truth)
+from core.calibration import MODEL_PRESETS  # noqa: E402  (single source of truth)
 
 
 # Anchors (measured 2026-08-25, 1.5B, 100-file sample)

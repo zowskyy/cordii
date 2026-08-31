@@ -6,7 +6,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from core.context import Context, MODEL_PRESETS, DEFAULT_PRESET_KEY, calibration_from_context
+from core.context import Context
+from core.calibration import MODEL_PRESETS, DEFAULT_PRESET_KEY, calibration_from_context
 from core.context_pruner import ContextPruner, PrunedContext
 from core.errors import ToolError
 from core.events import Manifest, SYSTEM_MESSAGE, USER_MESSAGE

@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from core.context import Context, resolve_calibration
+from core.context import Context
+from core.calibration import resolve_calibration
 from core.registry import PluginRegistry
 from plugins.agent.loop import AgentLoop
 from plugins.agent.semantic_router import SemanticRouter
