@@ -12,6 +12,7 @@ event log and metrics plugins; no LLM calls are made.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from pathlib import Path
@@ -60,7 +61,8 @@ if _FASTAPI_AVAILABLE:
     @api.get("/api/sessions/{session_id}/events")
     async def stream_events(session_id: str, request: Request):
         web = request.app.state.web_plugin
-        return EventSourceResponse(web.stream_events(session_id, await request.app.state.anyio.create_event()))
+        stop_event = asyncio.Event()
+        return EventSourceResponse(web.stream_events(session_id, stop_event))
 
     @api.get("/api/metrics")
     async def get_metrics(request: Request) -> JSONResponse:
