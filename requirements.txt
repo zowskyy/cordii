@@ -6,4 +6,5 @@ fastapi>=0.111.0
 uvicorn>=0.30.0
 pydantic>=2.7.0
 sse-starlette>=0.2.0
+pint>=0.23
 
