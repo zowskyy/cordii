@@ -15,19 +15,15 @@ from .calibration import (
     validate_calibration,
 )
 from .errors import CancelledError
+from .events import Event
 from .messages import Message
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class Event:
-    type: str
-    payload: Dict[str, Any] = field(default_factory=dict)
-
-
 class EventBus:
-    def __init__(self) -> None:
+    def __init__(self, session_id: str = "") -> None:
+        self._session_id = session_id
         self._listeners: Dict[str, List[Callable[[Event], None]]] = {}
         self._lock = threading.Lock()
 
@@ -44,7 +40,7 @@ class EventBus:
                 pass
 
     def emit(self, event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        event = Event(type=event_type, payload=payload or {})
+        event = Event(type=event_type, session_id=self._session_id, payload=payload or {})
         with self._lock:
             handlers = list(self._listeners.get(event_type, []))
             wildcards = list(self._listeners.get("*", []))
@@ -61,7 +57,7 @@ class Context:
     messages: List[Message] = field(default_factory=list)
     plugins: Dict[str, Any] = field(default_factory=dict)
     _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
-    events: EventBus = field(default_factory=EventBus)
+    events: EventBus = field(default_factory=lambda: EventBus(session_id=""))
     prompt_injections: List[Message] = field(default_factory=list)
 
     def append_message(

@@ -12,7 +12,11 @@ from plugins.agent.parameter_extractor import ParameterExtractor
 from plugins.agent.query_splitter import QuerySplitter
 from plugins.agent.multi_domain_router import MultiDomainRouter
 from plugins.agent.aggregate_response import AggregateResponse
+from plugins.agent.schema_router import SchemaRouter
+from plugins.agent.array_helper import ArrayHelper
+from plugins.agent.app_verifier import AppVerifier
 from plugins.core.event_logger import EventLogger
+from plugins.core.data_exporter import DataExporter
 from plugins.core.persona_memory import PersonaMemoryPlugin
 from plugins.core.lifecycle import LifecycleConsolidatorPlugin
 from plugins.core.telemetry import TelemetryPlugin
@@ -47,15 +51,16 @@ from plugins.model.ollama import OllamaModel
 from plugins.model.embedding import EmbeddingModel
 from plugins.parsers.tool_call_parser import OllamaToolCallParser
 from plugins.tools.file import FileTools
+from plugins.tools.asgi_wsgi_tester import ASGIWSGITester
 from plugins.ui.terminal import TerminalUI
 
 
-def build_application(workspace: Path, model_name: str, ollama_url: str, db_path: Path, profile: str = "lite", enable_semantic_router: bool = False):
+def build_application(workspace: Path, model_name: str, ollama_url: str, db_path: Path, profile: str = "lite", enable_semantic_router: bool = False, compact_schema: bool = False):
     """
     P2 FIX: Lite vs Full profile.
-    - lite (default): only what saves tokens for 1.5B. 19 plugins vs 42.
-      Zero-token pool + file tools + loop + single pruner. No observability theater.
-    - full: adds all 42 plugins for debugging/analysis. Semantic router gated even here.
+    - lite (default): 24 plugins (zero-token). Saves tokens for 1.5B via compact schema,
+      file tools, array helper, dry completions, server testing, and single pruner. Zero-token.
+    - full: 47 plugins (adds observability/memory/debugging). Semantic router gated even here.
 
     Per-model numbers (pruner budget, message cap, ...) are NOT literals in the
     invariant layer: they resolve from the model calibration table
@@ -64,6 +69,10 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
     # Resolve per-model calibration (table in core.context) so loop/pruner read
     # it from config. Explicit config overrides possible via resolve_calibration.
     calibration = resolve_calibration(model_name)
+    # SchemaRouter is always registered but compact mode is profile-dependent.
+    # lite: compact_schema=True (saves tokens for 1.5B). full: verbose by default.
+    schema_enabled = True
+    schema_compact = compact_schema or (profile == "lite")
     # Pass semantic flag via context config so SemanticRouter and loop can gate
     ctx = Context(config={
         "workspace": str(workspace.resolve()),
@@ -71,6 +80,8 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         "ollama_url": ollama_url,
         "profile": profile,
         "semantic_router_enabled": enable_semantic_router,
+        "schema_router_enabled": schema_enabled,
+        "compact_schema": schema_compact,
         "calibration": calibration,
     })
     reg = PluginRegistry(ctx)
@@ -81,15 +92,16 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         "file_tools": {"workspace": workspace},
     }
 
-    # === LITE CORE: 19 plugins total ===
-    # Event log: EventLogger
+    # === LITE CORE: 24 plugins total ===
+    # Event log: EventLogger, DataExporter
     # Model + parser: OllamaModel, OllamaToolCallParser
-    # Tools: FileTools
+    # Tools: FileTools, ASGIWSGITester
     # Deterministic pool (8): MathRouter, SymbolicEngine, MathVerifier, MathPipeline,
     #                         DateTimeRouter, DateTimeEngine, UnitsRouter, UnitsEngine
     # Routing layer (4): ParameterExtractor, QuerySplitter, MultiDomainRouter, AggregateResponse
-    # Pruner + loop + UI: ContextPrunerPlugin, AgentLoop, TerminalUI
-    # Total: 1 + 2 + 1 + 8 + 4 + 3 = 19
+    # SchemaRouter: compact tool schema (deterministic, zero-token)
+    # ArrayHelper + AppVerifier + ASGIWSGITester: deterministic reasoning & verification (zero-token)
+    # Pruner + loop + UI: ContextPrunerPlugin, AgentLoop, TerminalUI, DataExporter
     reg.register(EventLogger(db_path))
     reg.register(OllamaModel(**plugin_config["ollama_model"]))
     reg.register(FileTools(workspace))
@@ -108,10 +120,19 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
     reg.register(QuerySplitter())
     reg.register(MultiDomainRouter())
     reg.register(AggregateResponse())
-    # Single pruner (3k budget for 4k ctx) — needed even in lite
+    # Compact schema router (deterministic, zero-token — no model calls)
+    reg.register(SchemaRouter())
+    # Optional array reasoning capability (deterministic, zero-token)
+    reg.register(ArrayHelper())
+    # ASGI/WSGI server tester (deterministic, zero-token — only activates when invoked)
+    reg.register(ASGIWSGITester())
+    # App completion verifier — deterministic artifact checks (zero-token when not relevant)
+    reg.register(AppVerifier())
+    # Single pruner (30k budget for 33k ctx) — needed even in lite
     reg.register(ContextPrunerPlugin())
-    # Core loop
+    # Core loop + data export for fine-tuning (zero-token, deterministic)
     reg.register(AgentLoop())
+    reg.register(DataExporter())
     reg.register(TerminalUI())
 
     if profile == "full":
@@ -145,20 +166,32 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         # Semantic router not registered in lite at all — zero embedding cost
         pass
 
-    expected_lite = 21
-    expected_full = 44
+    expected_lite = 24
+    expected_full = 47
     actual = len(ctx.plugins)
     if profile == "lite":
         assert actual == expected_lite, f"Lite profile: expected {expected_lite} plugins, got {actual}"
         assert "semantic_router" not in ctx.plugins, "SemanticRouter registered in lite profile"
+        assert "schema_router" in ctx.plugins, "SchemaRouter should be registered in lite"
+        assert ctx.plugins["schema_router"].enabled is True, "SchemaRouter should be enabled in lite"
+        assert ctx.plugins["schema_router"].compact_mode is True, "SchemaRouter compact_mode should be True in lite"
+        assert "array_helper" in ctx.plugins, "ArrayHelper should be registered in lite"
+        assert "app_verifier" in ctx.plugins, "AppVerifier should be registered in lite"
+        assert "data_exporter" in ctx.plugins, "DataExporter should be registered in lite"
+        assert "asgi_wsgi_tester" in ctx.plugins, "ASGIWSGITester should be registered in lite"
     elif profile == "full":
-        assert actual == expected_full, f"Full profile: expected {expected_full} plugins, got {actual}"
+        assert actual == expected_full, f"Full profile: expected {expected_full}plugins, got {actual}"
+        assert "schema_router" in ctx.plugins, "SchemaRouter should be registered in full"
+        assert "app_verifier" in ctx.plugins, "AppVerifier should be registered in full"
+        assert "data_exporter" in ctx.plugins, "DataExporter should be registered in full"
+        assert "asgi_wsgi_tester" in ctx.plugins, "ASGIWSGITester should be registered in full"
+        assert "array_helper" in ctx.plugins, "ArrayHelper should be registered in full"
         if enable_semantic_router:
             assert ctx.plugins["semantic_router"].enabled is True, "SemanticRouter should be enabled"
         else:
             assert ctx.plugins["semantic_router"].enabled is False, "SemanticRouter should be disabled"
 
-    print(f"[startup] profile={profile}, plugins={actual}, model={model_name}, semantic_router={enable_semantic_router}")
+    print(f"[startup] profile={profile}, plugins={actual}, model={model_name}, semantic_router={enable_semantic_router}, compact_schema={schema_compact}")
 
     reg.start_all()
     return ctx, reg
@@ -170,15 +203,34 @@ def main() -> int:
     p.add_argument("--model", default="qwen2.5-coder:1.5b", help="Ollama model name")
     p.add_argument("--ollama-url", default="http://127.0.0.1:11434", help="Ollama base URL")
     p.add_argument("--db", default="continuity/continuity.db", help="SQLite event log path")
-    p.add_argument("--profile", default="lite", choices=["lite", "full"], help="lite=19 plugins (default, saves tokens), full=42 plugins (debug)")
+    p.add_argument("--profile", default="lite", choices=["lite", "full"], help="lite=24 plugins (default, saves tokens), full=47 plugins (debug)")
     p.add_argument("--enable-semantic-router", action="store_true", help="Enable semantic router (embedding cost, off by default)")
+    p.add_argument("--compact-schema", action="store_true", help="Enable compact tool schema (single call_tool interface, saves tokens)")
     p.add_argument("--dry-run", action="store_true", help="Build app, assert invariants, and exit without running UI")
+    p.add_argument("--export-data", action="store_true", help="Export successful session trajectories to JSONL for fine-tuning")
+    p.add_argument("--export-path", default="finetune_data", help="Directory for exported training data (default: finetune_data)")
     args = p.parse_args()
     workspace = Path(args.workspace).expanduser().resolve()
     db_path = Path(args.db).expanduser().resolve()
-    ctx, reg = build_application(workspace, args.model, args.ollama_url, db_path, profile=args.profile, enable_semantic_router=args.enable_semantic_router)
+    ctx, reg = build_application(workspace, args.model, args.ollama_url, db_path, profile=args.profile, enable_semantic_router=args.enable_semantic_router, compact_schema=args.compact_schema)
     if args.dry_run:
         print(f"Dry run OK: profile={args.profile}, plugins={len(ctx.plugins)}")
+        reg.stop_all()
+        return 0
+
+    if args.export_data:
+        exporter = ctx.plugins.get("data_exporter")
+        if exporter is None:
+            print("DataExporter not found in context")
+            reg.stop_all()
+            return 1
+        export_dir = Path(args.export_path).expanduser().resolve()
+        count = exporter.export_successful_sessions(export_dir)
+        print(f"[export] Exported {count} successful session trajectories to {export_dir}")
+        # Print first 5 file paths for verification
+        exported_files = sorted(export_dir.glob("*.jsonl"))[:5]
+        for f in exported_files:
+            print(f"  - {f}")
         reg.stop_all()
         return 0
     try:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Capacity Calculator — 4k window tunable for cordiiv2 pool philosophy.
+Capacity Calculator — 33k window tunable for cordiiv2 pool philosophy.
 
 Given max_tokens, guidance_tokens (lite vs full), per_file_tokens, delta_overhead,
 outputs maximum safe file window and recommended max_rounds for 1.5B vs larger models.
@@ -9,7 +9,7 @@ Uses only pre-existing deterministic math — no LLM, no new dependencies.
 Portable as you add tools/templates: just re-measure guidance/per_file/delta and rerun.
 
 First principles:
-- 4k ctx = 4096, but single pruner budget is 3000 for 1.5b (core/context.py MODEL_PRESETS) leaving 1k headroom.
+- 33k ctx = 32768, but single pruner budget is 30000 for 1.5b (core/context.py MODEL_PRESETS) leaving ~2768 headroom.
 - Total window = guidance + N * per_file + folds * delta + fixed overhead (ledger base, system msgs)
 - Folds trigger when estimated_tokens > pruner_budget or messages > max_messages (per-model, core/context.py)
 - 1.5B hallucination: needs ~1.3 rounds per file (duplicate block, retries), larger ~1.05
@@ -182,8 +182,8 @@ def solve_for_param(
 
 
 def main():
-    p = argparse.ArgumentParser(description="cordiiv2 capacity calculator — 4k window tunable. Formula: tokens = guidance + base + N*per_file + folds*delta, folds trigger when tokens > pruner_budget or messages > max_messages")
-    p.add_argument("--max-tokens", type=int, default=None, help="Model context window (e.g., 4096)")
+    p = argparse.ArgumentParser(description="cordiiv2 capacity calculator — 33k window tunable. Formula: tokens = guidance + base + N*per_file + folds*delta, folds trigger when tokens > pruner_budget or messages > max_messages")
+    p.add_argument("--max-tokens", type=int, default=None, help="Model context window (e.g., 32768)")
     p.add_argument("--guidance-tokens", type=int, default=None, help="Guidance tokens (lite 70, full 419). If omitted, shows both")
     p.add_argument("--per-file-tokens", type=int, default=None, help="Per file tokens (template 100, full 205). If omitted, shows both")
     p.add_argument("--delta-overhead", type=int, default=None, help="Delta per fold (13 delta, 40 full)")
@@ -234,10 +234,10 @@ def main():
         label = preset["label"]
         pruner_budget = preset["pruner_budget"]
     else:
-        max_tokens = args.max_tokens or 4096
+        max_tokens = args.max_tokens or 32768
         safety = args.safety if args.safety is not None else 0.85
-        max_messages = 40
-        rounds_per_file = 1.3
+        max_messages = 200
+        rounds_per_file = 1.05
         label = f"custom max_tokens={max_tokens}"
         pruner_budget = None
 

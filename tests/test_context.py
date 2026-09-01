@@ -44,7 +44,7 @@ def test_validate_calibration_accepts_valid_preset():
 
 def test_validate_calibration_rejects_missing_keys():
     with pytest.raises(ValueError, match="missing required keys"):
-        validate_calibration({"max_tokens": 4096})
+        validate_calibration({"max_tokens": 32768})
 
 
 def test_validate_calibration_rejects_non_positive_max_tokens():

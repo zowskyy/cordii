@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from .events import Event
+from .messages import Message
 
 
 class Summarizer:
@@ -62,27 +63,33 @@ class Summarizer:
 
     @staticmethod
     def fold_messages(messages: list[Any], max_messages: int = 40, task_state: dict[str, Any] | None = None) -> list[Any]:
-        # P1 FIX: Unified pruner preserves assistant+tool_calls (critical for 1.5B coherence)
-        # Previous version dropped assistant reasoning which breaks small model's few-shot memory
+        # Single authoritative pruner: delegate to ContextPruner so invariant 2.6
+        # (one pruning path, tool_calls preserved) is enforced in one place.
         if len(messages) <= max_messages:
             return messages
+
+        from .context_pruner import ContextPruner
+        pruner = ContextPruner(max_messages=max_messages - 1)
+        result = pruner.prune(messages, task_state)
+        pruned = result.messages
+
         task_state = task_state or {}
         user_goal = task_state.get("goal", "")
         files_touched = task_state.get("files_touched", [])
         tools_used = task_state.get("tools_used", [])
         unresolved = task_state.get("unresolved_subtasks", [])
-        # 3x delta: if previous fold exists, emit only new files since then (saves ~27 tokens per fold)
+
+        # Parse previous fold context for delta ledger
         prev_files: list[str] = []
-        for m in messages:
+        for m in pruned:
             if getattr(m, "role", None) == "system" and "[Context folded]" in (getattr(m, "content", "") or ""):
-                # parse previous Files: list
                 mt = re.search(r"Files: ([^|]+)", m.content)
                 if mt:
                     prev_files = [f.strip() for f in mt.group(1).split(",") if f.strip()]
-                # also handle delta format "+N: ..."
                 mt2 = re.search(r"\+(\d+): ([^|]+)", m.content)
                 if mt2:
                     prev_files.extend([f.strip() for f in mt2.group(2).split(",") if f.strip()])
+
         if prev_files:
             new_files = [f for f in files_touched if f not in prev_files]
             if new_files:
@@ -90,7 +97,6 @@ class Summarizer:
             else:
                 ledger_parts = [f"Task: {user_goal}"]
                 if tools_used:
-                    # only tools delta if files not new
                     new_tools = [t for t in tools_used if t not in prev_files]
                     if new_tools:
                         ledger_parts.append(f"Tools +{len(new_tools)}: {', '.join(new_tools)}")
@@ -103,37 +109,9 @@ class Summarizer:
         if unresolved:
             ledger_parts.append(f"Remaining: {', '.join(unresolved)}")
         ledger = " | ".join(ledger_parts)
-        # Preserve: user + system + assistant (especially with tool_calls) + tool
-        keep_users = [m for m in messages if getattr(m, "role", None) == "user"]
-        keep_systems = [m for m in messages if getattr(m, "role", None) == "system"]
-        keep_assistants = [m for m in messages if getattr(m, "role", None) == "assistant"]
-        kept_tools = [m for m in messages if getattr(m, "role", None) == "tool"]
-        # Always keep last 2 messages (usually assistant tool_call + tool result) plus all users and assistants with tool_calls
-        essential_assistants = [m for m in keep_assistants if getattr(m, "tool_calls", None)]
-        # Budget: keep ledger + users + essential_assistants + recent tools, trim oldest systems first
-        remaining = max_messages - 1 - len(keep_users) - len(essential_assistants)
-        if remaining < 0:
-            essential_assistants = essential_assistants[remaining:]
-            remaining = 0
-        # Keep recent tools within budget
-        kept_tools = kept_tools[-remaining:] if remaining > 0 else []
-        # Keep recent systems that are not old ledger-like (prefer recent)
-        keep_systems = keep_systems[-(max_messages - len(keep_users) - len(essential_assistants) - len(kept_tools) - 1):]
-        from core.messages import Message
-        summary_msg = Message(role="system", content=f"[Context folded] {ledger}")
-        # Reassemble in original order
-        candidates = set(id(m) for m in [summary_msg] + keep_users + keep_systems + essential_assistants + kept_tools)
-        # Preserve original ordering but ensure summary first, and keep last assistants that had no tool_calls if space
-        ordered = [summary_msg]
-        for m in messages:
-            if id(m) in candidates and m not in ordered:
-                ordered.append(m)
-        # If we still have space, add most recent non-essential assistants
-        if len(ordered) < max_messages:
-            for m in reversed(keep_assistants):
-                if m not in ordered and len(ordered) < max_messages:
-                    ordered.insert(1, m)
-        ordered.sort(key=lambda m: messages.index(m) if m in messages else -1)
-        if ordered[0] != summary_msg:
-            ordered = [summary_msg] + [m for m in ordered if m != summary_msg]
-        return ordered[:max_messages]
+
+        # Injected context as user message per invariant 2.7
+        summary_msg = Message(role="user", content=f"[injected context]\n{ledger}")
+
+        result_list = [summary_msg] + pruned
+        return result_list[:max_messages]

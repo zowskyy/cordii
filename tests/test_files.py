@@ -50,3 +50,62 @@ def test_read_json_invalid_rejected(files):
     files.write_file("bad.json", "{not-json")
     with pytest.raises(ToolError):
         files.read_json("bad.json")
+
+
+def test_delete_file_success(files):
+    files.write_file("to_delete.txt", "content")
+    result = files.delete_file("to_delete.txt")
+    assert "Deleted" in result
+    assert not (files.workspace / "to_delete.txt").exists()
+
+
+def test_delete_file_nonexistent_raises(files):
+    with pytest.raises(ToolError, match="does not exist"):
+        files.delete_file("nonexistent.txt")
+
+
+def test_delete_file_directory_raises(files):
+    files.write_file("subdir/file.txt", "content")
+    with pytest.raises(ToolError, match="directory"):
+        files.delete_file("subdir")
+
+
+# ---------------------------------------------------------------------------
+# Protected file enforcement
+# ---------------------------------------------------------------------------
+
+def test_write_protected_file_default_raises(files):
+    """AGENTS.md is protected by default — write must fail deterministically."""
+    # Create the file directly on disk (bypassing FileTools) to set initial content
+    (files.workspace / "AGENTS.md").write_text("# instructions", encoding="utf-8")
+    with pytest.raises(ToolError, match="(?i)protected"):
+        files.write_file("AGENTS.md", "# modified")
+    assert (files.workspace / "AGENTS.md").read_text(encoding="utf-8") == "# instructions"
+
+
+def test_delete_protected_file_default_raises(files):
+    """AGENTS.md is protected by default — delete must fail deterministically."""
+    (files.workspace / "AGENTS.md").write_text("# instructions", encoding="utf-8")
+    with pytest.raises(ToolError, match="(?i)protected"):
+        files.delete_file("AGENTS.md")
+    assert (files.workspace / "AGENTS.md").exists()
+
+
+def test_custom_protected_file_rejected(files):
+    """Files specified in config['protected_files'] must also be protected."""
+    # Register with a context that has protected_files config
+    from core.context import Context
+    ctx = Context(config={"protected_files": ["secret.txt"], "profile": "lite"})
+    files.register(ctx)
+    # Create the file directly on disk
+    (files.workspace / "secret.txt").write_text("data", encoding="utf-8")
+    with pytest.raises(ToolError, match="(?i)protected"):
+        files.write_file("secret.txt", "modified")
+    assert (files.workspace / "secret.txt").read_text(encoding="utf-8") == "data"
+
+
+def test_non_protected_file_writable(files):
+    """Regular files must still be writable."""
+    files.write_file("normal.txt", "data")
+    files.write_file("normal.txt", "updated")
+    assert (files.workspace / "normal.txt").read_text(encoding="utf-8") == "updated"

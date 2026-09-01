@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .context import Context, Event, EventBus
+from .context import Context, EventBus
+from .events import Event
 
 
 class Plugin:

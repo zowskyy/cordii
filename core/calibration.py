@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 
 MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
-    "1.5b": {"label": "qwen2.5-coder:1.5b (4k, flaky)", "max_tokens": 4096, "pruner_budget": 3000, "safety": 0.85, "max_messages": 40, "rounds_per_file": 1.3, "max_tool_result_bytes": 8192},
+    "1.5b": {"label": "qwen2.5-coder:1.5b (33k)", "max_tokens": 32768, "pruner_budget": 30000, "safety": 0.85, "max_messages": 200, "rounds_per_file": 1.05, "max_tool_result_bytes": 65536},
     "7b": {"label": "qwen2.5-coder:7b (8k, stable)", "max_tokens": 8192, "pruner_budget": 6500, "safety": 0.88, "max_messages": 60, "rounds_per_file": 1.05, "max_tool_result_bytes": 16384},
     "14b": {"label": "qwen2.5-coder:14b (16k)", "max_tokens": 16384, "pruner_budget": 14000, "safety": 0.90, "max_messages": 80, "rounds_per_file": 1.02, "max_tool_result_bytes": 32768},
 }

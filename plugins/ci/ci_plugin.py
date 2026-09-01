@@ -29,7 +29,7 @@ class CIPlugin(EventDrivenPlugin):
     name = "ci_plugin"
     dependencies = ()
 
-    def __init__(self, repo: str = "zowskyy/cordii", workflow: str = "Long-Horizon Benchmark.yml") -> None:
+    def __init__(self, repo: str | None = None, workflow: str = "Long-Horizon Benchmark.yml") -> None:
         super().__init__()
         self._repo = repo
         self._workflow = workflow
@@ -39,8 +39,8 @@ class CIPlugin(EventDrivenPlugin):
         self._last_fetch = 0.0
 
     def start(self) -> None:
-        # D3: auto-detect repo from git remote if default placeholder
-        if self._repo in ("zowskyy/cordii", "unknown/repo"):
+        # Auto-detect repo from git remote if not explicitly provided
+        if self._repo is None:
             detected = self._detect_repo()
             if detected:
                 self._repo = detected
@@ -57,7 +57,6 @@ class CIPlugin(EventDrivenPlugin):
             if result.returncode == 0 and result.stdout.strip():
                 url = result.stdout.strip()
                 # Parse github.com:user/repo(.git)
-                import re
                 m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
                 if m:
                     repo = m.group(1).strip("/")

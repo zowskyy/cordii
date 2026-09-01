@@ -2,14 +2,14 @@
 
 
 
-Fork of corditelite with first-principles fixes for 1.5B local models (qwen2.5-coder:1.5b, 4k ctx).
+Fork of corditelite with first-principles fixes for 1.5B local models (qwen2.5-coder:1.5b, 33k ctx).
 
 ## What changed vs corditelite (audit fixes)
 
 **P0 — Zero-token guarantee**
 - `SemanticRouter` default OFF. Enable only with `--enable-semantic-router` or `config["semantic_router_enabled"]=True`. No embedding cost by default.
 - Fix double `turn.start` emit in `plugins/agent/loop.py:239 + 319` → single outer + `turn.round` per iteration.
-- `requirements.txt` now complete (`sympy, gradio, ollama`).
+- `requirements.txt` now complete (`sympy, ollama`). Gradio moved to `requirements-dev.txt` for the UI harness.
 
 **P1 — Context + security**
 - Single pruner: `ContextPruner` @ 3000 token budget (was dual 4000 + 4000). Preserves `assistant` with `tool_calls` for 1.5B coherence (`core/summarizer.py:64`).
@@ -34,7 +34,9 @@ Full adds: EmbeddingModel, SemanticRouter (gated), Health/Tracing/Metrics, Perso
 pip install -r requirements.txt
 python main.py --profile lite              # 19 plugins, default
 python main.py --profile full --enable-semantic-router  # 42 plugins + embeddings
-# or via python ui.py (Gradio web UI)
+# UI harness (Gradio) needs the dev extras:
+pip install -r requirements-dev.txt
+python ui.py
 ```
 
 Commands: `/math`, `/datetime`, `/units`, `/help`, `/quit`
@@ -51,7 +53,7 @@ python -m pytest tests/test_math.py -q
 ## Profiles
 | Profile | Plugins | Use |
 |---|---|---|
-| lite (default) | 19 | Local 1.5B, 4k ctx, save tokens |
+| lite (default) | 19 | Local 1.5B, 33k ctx, save tokens |
 | full | 42 | Debug, memory, observability |
 
 See `PROJECT_TRACKING.md` for file inventory.

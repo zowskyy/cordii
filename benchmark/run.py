@@ -121,9 +121,10 @@ class BenchmarkRunner:
             peak_memory_kb = int(peak / 1024)
             tracemalloc.stop()
 
-            cont = ctx.plugins.get("continuity")
-            session_id = cont.session_id if cont and hasattr(cont, "session_id") else "default"
-            events = ctx.plugins["event_log"].get_session_events(session_id)
+            el = ctx.plugins["event_logger"]
+            cont = el.continuity
+            session_id = cont.session_id if hasattr(cont, "session_id") else "default"
+            events = el.event_log.get_session_events(session_id)
             invocations = [e for e in events if e.type == "tool.invoked"]
             results = [e for e in events if e.type == "tool.result"]
             tool_call_count = len(invocations)
@@ -196,7 +197,7 @@ class BenchmarkRunner:
             pass
         finally:
             reg.stop_all()
-            ctx.plugins["event_log"].close()
+            ctx.plugins["event_logger"].event_log.close()
 
         return TrajectoryMetrics(
             trajectory_id=f"{task.name}_{datetime.now().isoformat()}",

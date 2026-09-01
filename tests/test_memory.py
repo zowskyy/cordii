@@ -17,10 +17,10 @@ def test_remember_and_recall(tmp_path):
     reg.register(EventLogger(tmp_path / "test.db"))
     reg.start_all()
     try:
-        mem = EpisodicMemory(ctx.plugins["event_log"])
+        mem = EpisodicMemory(ctx.plugins["event_logger"].event_log)
         from core.events import Event
         e = Event(type="tool.result", session_id="s1", payload={"tool_name": "file_write"})
-        e.id = ctx.plugins["event_log"].append(e)
+        e.id = ctx.plugins["event_logger"].event_log.append(e)
         mem.remember(e, "Wrote file.txt", tags=["file_write"])
         memories = mem.recall("s1", limit=5)
         assert len(memories) == 1
@@ -36,12 +36,12 @@ def test_recall_filtered_by_query(tmp_path):
     reg.register(EventLogger(tmp_path / "test.db"))
     reg.start_all()
     try:
-        mem = EpisodicMemory(ctx.plugins["event_log"])
+        mem = EpisodicMemory(ctx.plugins["event_logger"].event_log)
         from core.events import Event
         e1 = Event(type="tool.result", session_id="s1", payload={"tool_name": "file_write"})
         e2 = Event(type="tool.result", session_id="s1", payload={"tool_name": "file_read"})
-        e1.id = ctx.plugins["event_log"].append(e1)
-        e2.id = ctx.plugins["event_log"].append(e2)
+        e1.id = ctx.plugins["event_logger"].event_log.append(e1)
+        e2.id = ctx.plugins["event_logger"].event_log.append(e2)
         mem.remember(e1, "Wrote file.txt", tags=["file_write"])
         mem.remember(e2, "Read file.txt", tags=["file_read"])
         results = mem.recall("s1", query="Wrote")
@@ -57,12 +57,12 @@ def test_recall_returns_latest_first(tmp_path):
     reg.register(EventLogger(tmp_path / "test.db"))
     reg.start_all()
     try:
-        mem = EpisodicMemory(ctx.plugins["event_log"])
+        mem = EpisodicMemory(ctx.plugins["event_logger"].event_log)
         from core.events import Event
         e1 = Event(type="tool.result", session_id="s1", payload={"tool_name": "file_write"})
         e2 = Event(type="tool.result", session_id="s1", payload={"tool_name": "file_read"})
-        e1.id = ctx.plugins["event_log"].append(e1)
-        e2.id = ctx.plugins["event_log"].append(e2)
+        e1.id = ctx.plugins["event_logger"].event_log.append(e1)
+        e2.id = ctx.plugins["event_logger"].event_log.append(e2)
         mem.remember(e1, "First", tags=[])
         mem.remember(e2, "Second", tags=[])
         results = mem.recall("s1", limit=10)
@@ -77,10 +77,10 @@ def test_remember_ignores_duplicate_event_id(tmp_path):
     reg.register(EventLogger(tmp_path / "test.db"))
     reg.start_all()
     try:
-        mem = EpisodicMemory(ctx.plugins["event_log"])
+        mem = EpisodicMemory(ctx.plugins["event_logger"].event_log)
         from core.events import Event
         e = Event(type="tool.result", session_id="s1", payload={"tool_name": "file_write"})
-        e.id = ctx.plugins["event_log"].append(e)
+        e.id = ctx.plugins["event_logger"].event_log.append(e)
         mem.remember(e, "First")
         mem.remember(e, "Duplicate")
         results = mem.recall("s1", limit=10)

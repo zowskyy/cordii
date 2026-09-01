@@ -57,7 +57,7 @@ def test_agent_loop_without_context_builder(tmp_path):
         assert result == "done"
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
 
 
 def test_agent_loop_with_context_builder_augments_messages(tmp_path):
@@ -80,7 +80,7 @@ def test_agent_loop_with_context_builder_augments_messages(tmp_path):
         assert cb.build_calls[0]["query"] == "create a file"
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
 
 
 def test_agent_loop_emits_memory_augmented_event(tmp_path):
@@ -98,16 +98,16 @@ def test_agent_loop_emits_memory_augmented_event(tmp_path):
     ctx.plugins["context_builder"] = cb
     try:
         ctx.plugins["agent_loop"].run("create a file")
-        cont = ctx.plugins.get("continuity")
-        session_id = cont.session_id if cont and hasattr(cont, "session_id") else "default"
-        el = ctx.plugins["event_log"]
-        events = el.get_session_events(session_id)
+        el = ctx.plugins["event_logger"]
+        cont = el.continuity
+        session_id = cont.session_id if hasattr(cont, "session_id") else "default"
+        events = el.event_log.get_session_events(session_id)
         memory_events = [e for e in events if e.type == "memory.augmented"]
         assert len(memory_events) >= 1
         assert memory_events[0].payload["context_length"] > 0
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
 
 
 def test_agent_loop_with_empty_memory_context(tmp_path):
@@ -129,4 +129,4 @@ def test_agent_loop_with_empty_memory_context(tmp_path):
         assert len(cb.build_calls) >= 1
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()

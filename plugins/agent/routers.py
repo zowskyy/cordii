@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def try_math_router(text: str, context: Any) -> Optional[str]:
@@ -51,8 +54,8 @@ def try_math_router(text: str, context: Any) -> Optional[str]:
                     formatted = "\n".join(result.steps + [f"Result: {result.result}"])
                     context.append_message("assistant", formatted)
                     return formatted
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Math router failed: %s", exc)
     return None
 
 
@@ -81,8 +84,8 @@ def try_datetime_router(text: str, context: Any) -> Optional[str]:
                 formatted = "\n".join(computed.steps + [f"Result: {computed.result}"])
                 context.append_message("assistant", formatted)
                 return formatted
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Math router failed: %s", exc)
     return None
 
 
@@ -111,8 +114,8 @@ def try_units_router(text: str, context: Any) -> Optional[str]:
                 formatted = "\n".join(computed.steps + [f"Result: {computed.result}"])
                 context.append_message("assistant", formatted)
                 return formatted
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Math router failed: %s", exc)
     return None
 
 

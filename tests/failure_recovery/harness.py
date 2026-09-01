@@ -123,13 +123,14 @@ class DeterministicSandbox:
             sc.task_success = result == task.expected_output
             sc.steps_used = len(ctx.messages)
             sc.tool_calls_used = sum(1 for m in ctx.messages if m.tool_calls)
-            events = ctx.plugins["event_log"].get_session_events(ctx.plugins["continuity"].session_id)
+            el = ctx.plugins["event_logger"]
+            events = el.event_log.get_session_events(el.continuity.session_id)
             sc = _metrics(events, sc)
         except Exception as exc:
             sc.error = str(exc)
         finally:
             reg.stop_all()
-            ctx.plugins["event_log"].close()
+            ctx.plugins["event_logger"].event_log.close()
         return sc
 
 

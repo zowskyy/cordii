@@ -37,7 +37,7 @@ The primary design target is:
 
 ```text
 Model: qwen2.5-coder:1.5b
-Context window: 4096 tokens
+Context window: 32768 tokens
 Working budget: 3000 tokens
 Reserved KV headroom: 1000 tokens
 ```
@@ -79,9 +79,9 @@ Do not add unnecessary static instructions, duplicated architecture explanations
 
 ---
 
-### 2.2 4k Context Window
+### 2.2 33k Context Window
 
-The 1.5B preset has a hard 4096-token context limit.
+The 1.5B preset has a hard 32768-token context limit.
 
 Rules:
 

@@ -142,15 +142,16 @@ def _run_single(task: Task, workspace: Path):
     reg.start_all()
     try:
         result = ctx.plugins["agent_loop"].run(task.user_input)
-        cont = ctx.plugins.get("continuity")
-        session_id = cont.session_id if cont and hasattr(cont, "session_id") else "default"
-        events = ctx.plugins["event_log"].get_session_events(session_id)
+        el = ctx.plugins["event_logger"]
+        cont = el.continuity
+        session_id = cont.session_id if hasattr(cont, "session_id") else "default"
+        events = el.event_log.get_session_events(session_id)
         return ctx, reg, result, events
     except Exception as exc:
         return ctx, reg, exc, []
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
 
 
 def diagnose(task: Task):

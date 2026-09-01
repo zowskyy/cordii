@@ -87,7 +87,8 @@ def test_live_model_event_logging(tmp_path):
             if "maximum tool-call rounds" not in str(e).lower():
                 raise
             # 1.5B thrash on chat is known-flaky; session/user/assistant events still emit before max_rounds.
-        events = ctx.plugins["event_log"].get_session_events(ctx.plugins["continuity"].session_id)
+        el = ctx.plugins["event_logger"]
+        events = el.event_log.get_session_events(el.continuity.session_id)
         types = [e.type for e in events]
         assert {"session.start", "user.message", "assistant.message"}.issubset(types)
     finally:

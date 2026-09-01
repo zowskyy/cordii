@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import gradio as gr
 
 from core.context import Context
+from core.calibration import resolve_calibration
 from core.registry import PluginRegistry
 from core.messages import Message
 from plugins.agent.loop import AgentLoop
@@ -23,20 +24,23 @@ from plugins.model.ollama import OllamaModel
 from plugins.tools.file import FileTools
 
 
-WORKSPACE = Path(tempfile.mkdtemp(prefix="cordelite_ui_"))
-WORKSPACE.mkdir(parents=True, exist_ok=True)
-
-
 def run_agent(user_input: str, model: str = "qwen2.5-coder:1.5b") -> str:
     workspace = tempfile.mkdtemp(prefix="cordelite_run_")
     try:
-        ctx = Context()
+        calibration = resolve_calibration(model)
+        ctx = Context(config={
+            "workspace": workspace,
+            "model": model,
+            "profile": "lite",
+            "calibration": calibration,
+        })
         reg = PluginRegistry(ctx)
         db_path = Path(workspace) / "benchmark.db"
         reg.register(EventLogger(db_path))
         reg.register(OllamaModel(model=model))
         reg.register(FileTools(Path(workspace)))
-        reg.register(AgentLoop(max_rounds=5))
+        max_rounds = calibration.get("max_rounds", 12)
+        reg.register(AgentLoop(max_rounds=max_rounds))
         reg.start_all()
 
         result = ctx.plugins["agent_loop"].run(user_input)
@@ -45,7 +49,7 @@ def run_agent(user_input: str, model: str = "qwen2.5-coder:1.5b") -> str:
         return f"Error: {e}"
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
         shutil.rmtree(workspace, ignore_errors=True)
 
 

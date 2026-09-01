@@ -88,6 +88,47 @@ class EventLog:
     def get_events_after(self, session_id: str, version: int) -> list[Event]:
         return self._rows("SELECT * FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC", (session_id, version))
 
+    def mark_session_outcome(self, session_id: str, outcome: str, metadata: dict[str, Any] | None = None) -> int:
+        """Record the outcome of a session for training data collection.
+
+        Args:
+            session_id: The session identifier.
+            outcome: "success", "partial", or "failure".
+            metadata: Additional data (files_created, tools_used, model_turns, app_type, etc.).
+
+        Returns:
+            Row ID of the inserted outcome event.
+        """
+        payload = {"outcome": outcome, "timestamp": datetime.now(timezone.utc).isoformat()}
+        if metadata:
+            payload.update(metadata)
+        cur = self._conn.execute(
+            "INSERT INTO events (timestamp, type, session_id, task_id, parent_event_id, operation_id, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                payload["timestamp"],
+                "session.outcome",
+                session_id,
+                None,
+                None,
+                None,
+                json.dumps(payload, ensure_ascii=False, default=str),
+            ),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def query(self, query: str, params: tuple = ()) -> list[tuple]:
+        """Execute an arbitrary read query (for data exporter use).
+
+        Args:
+            query: SQL query string.
+            params: Query parameters.
+
+        Returns:
+            List of row tuples.
+        """
+        return self._conn.execute(query, params).fetchall()
+
     def save_snapshot(self, stream_id: str, version: int, state: dict, compress: bool = True) -> None:
         raw = json.dumps(state, ensure_ascii=False, default=str)
         if compress:

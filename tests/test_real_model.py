@@ -115,7 +115,8 @@ def test_event_logging_with_real_model():
         try:
             try:
                 ctx.plugins["agent_loop"].run("Say hello")
-                events = ctx.plugins["event_log"].get_session_events(ctx.plugins["continuity"].session_id)
+                el = ctx.plugins["event_logger"]
+                events = el.event_log.get_session_events(el.continuity.session_id)
                 types = {e.type for e in events}
                 assert {"session.start", "user.message", "assistant.message"}.issubset(types)
             except Exception as e:

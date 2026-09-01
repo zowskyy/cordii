@@ -22,11 +22,12 @@ from plugins.agent.semantic_router import SemanticRouter
 from plugins.agent.specialized_routers import RepairMessageBuilder, SpecializedRouters, ToolResultVerifier
 from plugins.agent.aggregate_response import AggregateResponse
 from plugins.agent.multi_domain_router import MultiDomainRouter
+from plugins.agent.schema_router import SchemaRouter
 
 # Back-compat alias (tests import it). The VALUE comes from the shared model
 # calibration table (core.context.MODEL_PRESETS), not a literal here: the
-# invariant layer carries no model-specific numbers. 1.5b default = 3000
-# budget leaving 1k headroom for the 4096 window (Modelfile num_ctx 4096).
+# invariant layer carries no model-specific numbers. 1.5b default = 30000
+# budget leaving ~2768 headroom for the 32768 window (Modelfile num_ctx 32768).
 TOKEN_BUDGET = MODEL_PRESETS[DEFAULT_PRESET_KEY]["pruner_budget"]
 
 
@@ -43,6 +44,7 @@ class AgentLoop(Plugin):
         self._failed_calls: dict[str, int] = {}
         self._successful_calls: set[str] = set()
         self._replan_count = 0
+        self._round = 0
         self._healing = BudgetedSelfHealing()
         self._context_builder = None
         # Built in start() from the active model calibration (core.context).
@@ -58,6 +60,9 @@ class AgentLoop(Plugin):
         self._projector: RealityProjector | None = None
         self._manifest: Manifest | None = None
         self._system_prompt: str | None = None
+        self._schema_router: SchemaRouter | None = None
+        self._array_helper: Any = None
+        self._app_verifier: Any = None
 
     def start(self) -> None:
         assert self.context is not None
@@ -68,6 +73,8 @@ class AgentLoop(Plugin):
         files = self.context.plugins["file_tools"]
         self._tool_schemas = files.schemas()
         self._tool_handlers = {s["function"]["name"]: files.execute for s in self._tool_schemas}
+        self._schema_router = self.context.plugins.get("schema_router")
+        self._array_helper = self.context.plugins.get("array_helper")
         self._routers = SpecializedRouters(
             tool_handlers=self._tool_handlers,
             context=self.context,
@@ -77,9 +84,42 @@ class AgentLoop(Plugin):
         self._semantic_router = self.context.plugins.get("semantic_router")
         self._multi_domain_router = self.context.plugins.get("multi_domain_router")
         self._aggregator = self.context.plugins.get("aggregate_response")
+        self._app_verifier = self.context.plugins.get("app_verifier")
 
     def tool_schemas(self) -> list[dict[str, Any]]:
         return list(self._tool_schemas)
+
+    def _get_active_tool_schemas(self) -> list[dict[str, Any]]:
+        """Return the tool schemas the model should see this turn.
+
+        If schema_router is enabled and compact_schema is True, use the
+        compact schema from the router instead of the verbose registry schemas.
+        """
+        if self._schema_router is not None and getattr(self._schema_router, "enabled", False):
+            compact = self._schema_router.get_model_tools()
+            if compact:
+                return compact
+        return list(self._tool_schemas)
+
+    def _expand_compact_calls(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Expand compact-schema logical calls (call_tool) into real tool calls.
+
+        When the model uses call_tool(tool, args), this method rewrites each
+        call into the real tool name/arguments expected by the rest of the loop.
+        Calls that are not compact-schema calls pass through unchanged.
+        'done' logical calls are dropped (no real tool to execute).
+        """
+        if self._schema_router is None or not getattr(self._schema_router, "enabled", False):
+            return tool_calls
+
+        expanded: list[dict[str, Any]] = []
+        for call in tool_calls:
+            real = self._schema_router.expand_call(call)
+            if real is None:
+                # 'done' or unknown — skip (no real tool)
+                continue
+            expanded.append(real)
+        return expanded
 
     def _sig(self, call: dict[str, Any]) -> str:
         fn = call.get("function", {})
@@ -125,6 +165,18 @@ class AgentLoop(Plugin):
         name = fn.get("name")
         if not isinstance(name, str):
             raise ToolError("Tool call has no valid function name.")
+
+        # Defense-in-depth: if a compact-schema call_tool reaches dispatch
+        # without prior expansion, expand it here.
+        if name == "call_tool" and self._schema_router is not None and getattr(self._schema_router, "enabled", False):
+            expanded = self._schema_router.expand_call(call)
+            if expanded is None:
+                # 'done' or unknown — no real tool to execute
+                return json.dumps({"status": "done", "tool": "call_tool", "arguments": {}}, ensure_ascii=False)
+            call = expanded
+            fn = call.get("function", {})
+            name = fn.get("name", "")
+
         arguments = self._parse_arguments(fn.get("arguments"))
         handler = self._tool_handlers.get(name)
         if handler is None:
@@ -161,13 +213,9 @@ class AgentLoop(Plugin):
             healing = self._healing.handle_failure(failure_type, {"tool_name": name, "arguments": arguments})
             action = healing.get("action", "abstain")
             if action == "retry":
-                if self.context is not None:
-                    self.context.events.emit("tool.result", {"tool_name": name, "call_id": call_id, "arguments": arguments, "success": False, "error": str(exc), "failure_type": failure_type.value})
                 raise
             repair = RepairMessageBuilder.build(name, failure_type, healing)
             self.context.append_message("system", repair)
-            if self.context is not None:
-                self.context.events.emit("tool.result", {"tool_name": name, "call_id": call_id, "arguments": arguments, "success": False, "error": str(exc), "failure_type": failure_type.value, "repair": repair})
             raise
 
         if step is not None:
@@ -175,18 +223,17 @@ class AgentLoop(Plugin):
             step.governance_check_passed = verified
             logger.finish_step(step, output=result)
 
-        if self.context is not None:
-            self.context.events.emit("tool.result", {"tool_name": name, "call_id": call_id, "arguments": arguments, "success": True, "result": result})
         return result
 
     def _get_session_id(self) -> str:
-        cont = self.context.plugins.get("continuity")
-        if cont and hasattr(cont, "session_id"):
-            return cont.session_id
+        event_logger = self.context.plugins.get("event_logger") if self.context else None
+        if event_logger is not None and hasattr(event_logger, "continuity"):
+            return event_logger.continuity.session_id
         return "default"
 
     def _build_manifest(self, system_prompt: str) -> Manifest:
-        sch_json = json.dumps(self._tool_schemas, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        active_schemas = self._get_active_tool_schemas()
+        sch_json = json.dumps(active_schemas, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         sch_hash = hashlib.sha256(sch_json.encode("utf-8")).hexdigest()
         profile = self.context.config.get("profile", "lite") if self.context else "lite"
         digest = hashlib.sha256(
@@ -214,11 +261,12 @@ class AgentLoop(Plugin):
 
     def _compile_request_envelope(self, session_id: str, system_prompt: str) -> RequestEnvelope:
         if self._projector is None:
-            self._projector = RealityProjector(self.context.plugins["event_log"])
+            self._projector = RealityProjector(self.context.plugins["event_logger"].event_log)
         if self._manifest is None:
             self._manifest = self._build_manifest(system_prompt)
         self._projector.invalidate_cache(session_id)
-        return self._projector.compile_request(session_id, self._manifest, system_prompt, self._tool_schemas, self._token_budget)
+        active_schemas = self._get_active_tool_schemas()
+        return self._projector.compile_request(session_id, self._manifest, system_prompt, active_schemas, self._token_budget)
 
     @staticmethod
     def _consume_stream(chunks: Any, on_stream: Optional[Callable[[Message], None]] = None) -> Message:
@@ -231,13 +279,24 @@ class AgentLoop(Plugin):
 
     def _record_tool_result(self, tool_name: str, arguments: dict, result: str, success: bool) -> None:
         if isinstance(result, str):
-            # 4k window protection (calibration-separation axiom): a single tool
+            # 33k window protection (calibration-separation axiom): a single tool
             # result must never occupy more than its calibrated share of the
             # window. The file keeps its full content on disk; the model works
             # on the first chunk and the marker tells it the file continues.
             raw = result.encode("utf-8")
             if len(raw) > self._max_result_bytes:
                 result = raw[: self._max_result_bytes].decode("utf-8", errors="ignore") + f"\n…[truncated: showing first {self._max_result_bytes} bytes of a larger file]"
+            # Compact-schema result compression: truncate large read results
+            if self._schema_router is not None and getattr(self._schema_router, "compact_mode", False):
+                try:
+                    parsed = json.loads(result)
+                    if isinstance(parsed, dict):
+                        result = json.dumps(self._schema_router.compress_result(parsed), ensure_ascii=False)
+                    elif not isinstance(parsed, list) and len(result) > self._schema_router._PREVIEW_LIMIT:
+                        result = result[: self._schema_router._PREVIEW_LIMIT] + "..."
+                except (json.JSONDecodeError, TypeError):
+                    if len(result) > self._schema_router._PREVIEW_LIMIT:
+                        result = result[: self._schema_router._PREVIEW_LIMIT] + "..."
         call_id = f"zt_{tool_name}_{hashlib.md5(str(arguments).encode()).hexdigest()[:8]}"
         if self.context is not None:
             self.context.events.emit("tool.invoked", {"tool_name": tool_name, "call_id": call_id, "arguments": arguments})
@@ -305,6 +364,11 @@ class AgentLoop(Plugin):
         self._successful_calls.clear()
         self._replan_count = 0
         self._parse_retry_count = 0
+
+        # Reset per-run state for optional plugins (zero-drag invariant)
+        if self._array_helper is not None and hasattr(self._array_helper, "reset_run_state"):
+            self._array_helper.reset_run_state()
+
         self.context.append_message("user", user_text)
         if self.context is not None:
             self.context.events.emit("user.message", {"content": user_text})
@@ -346,17 +410,53 @@ class AgentLoop(Plugin):
 
         task_state = {"goal": user_text, "files_touched": [], "tools_used": [], "unresolved_subtasks": []}
 
+        # --- Optional ArrayHelper integration (zero-drag when irrelevant) ---
+        # Analyze task relevance deterministically (reset already done in run() preamble)
+        array_facts: dict[str, Any] = {}
+        array_facts_changed = False
+
+        if self._array_helper is not None:
+            array_analysis = self._array_helper.analyze_task(user_text)
+            if array_analysis.get("relevant") and array_analysis.get("confidence") in ("medium", "high"):
+                array_facts = {
+                    "operation": array_analysis.get("operation"),
+                    "risks": array_analysis.get("risks", []),
+                }
+                array_facts_changed = True
+                if self.context is not None:
+                    self.context.events.emit("array.analysis.completed", {
+                        "session_id": session_id,
+                        "relevant": True,
+                        "operation": array_analysis.get("operation"),
+                        "confidence": array_analysis.get("confidence"),
+                    })
+
         # Track A 3x: Minimal guidance only when explicitly lite (tests without profile keep full for backward compat)
         is_lite = (self.context.config.get("profile") == "lite") if self.context and "profile" in self.context.config else False
+        compact_mode = (
+            self._schema_router is not None
+            and getattr(self._schema_router, "enabled", False)
+            and getattr(self._schema_router, "compact_mode", False)
+        )
         if is_lite:
-            tool_guidance = json.dumps({
-                "role": "system",
-                "content": (
-                    "4k Tools: write_file(path,content) read_file(path) list_directory\n"
-                    "JSON: {\"tool_calls\":[{\"function\":{\"name\":\"write_file\",\"arguments\":{\"path\":\"a.txt\",\"content\":\"hi\"}}}]} "
-                    "ONE per turn. Check exists first. /math for math. TEMPLATE:todo:index.html expands to full file (use for todo app)."
-                )
-            }, ensure_ascii=False)
+            if compact_mode:
+                tool_guidance = json.dumps({
+                    "role": "system",
+                        "content": (
+                            "33k Tool: call_tool(tool,args). Tools: read(path) write(path,content) list(path) delete(path) done.\n"
+                            "JSON: {\"tool_calls\":[{\"function\":{\"name\":\"call_tool\",\"arguments\":{\"tool\":\"write\",\"args\":{\"path\":\"a.txt\",\"content\":\"hi\"}}}}]}\n"
+                            "ONE per turn. Check exists first. /math for math. TEMPLATE:todo:index.html expands to full file (use for todo app)."
+                        )
+                    }, ensure_ascii=False)
+            else:
+                tool_guidance = json.dumps({
+                    "role": "system",
+                    "content": (
+                        "33k Tools: write_file(path,content) read_file(path) list_directory\n"
+                        "JSON: {\"tool_calls\":[{\"function\":{\"name\":\"write_file\",\"arguments\":{\"path\":\"a.txt\",\"content\":\"hi\"}}}]} "
+                        "ONE per turn. Check exists first. /math for math. TEMPLATE:todo:index.html expands to full file (use for todo app)."
+                    )
+                }, ensure_ascii=False)
         else:
             tool_guidance = json.dumps({
                  "role": "system",
@@ -373,7 +473,7 @@ class AgentLoop(Plugin):
                  "5. After tool results are provided, you may continue the conversation or call another tool if needed.\n" +
                  "6. For mathematical problems (algebra, calculus, limits, matrices), the /math command can be used for exact symbolic computation. Use tools for non-math tasks only.\n" +
                  "7. For simple chat/greetings (e.g., 'Say hello'), respond directly with text and do NOT use tools."
-            }, ensure_ascii=False)
+             }, ensure_ascii=False)
         self._system_prompt = tool_guidance
         self.context.append_message("system", tool_guidance)
         if not is_lite and self.context is not None:
@@ -381,6 +481,7 @@ class AgentLoop(Plugin):
 
         session_id = self._get_session_id()
         for round_idx in range(self.max_rounds):
+            self._round = round_idx + 1
             self.context.check_cancelled()
             # P1 FIX: Unified single pruner (was dual: Summarizer.fold + prune). Now single ContextPruner handles both
             # token budget and message count (per-model via core.context calibration), preserves assistant tool_calls
@@ -412,11 +513,12 @@ class AgentLoop(Plugin):
                     self.context.events.emit(SYSTEM_MESSAGE, {"content": memory_context, "provenance": "memory"})
 
             # P0 FIX: Removed duplicate turn.start emit (was firing per-round + outer). Use turn.round for per-round.
+            active_schemas = self._get_active_tool_schemas()
             self.context.events.emit("turn.round", {
                 "user_text": user_text,
                 "session_id": session_id,
                 "round": round_idx,
-                "tools_available": [s["function"]["name"] for s in self._tool_schemas],
+                "tools_available": [s["function"]["name"] for s in active_schemas],
             })
 
             # P1 FIX: Harden prompt injections — inject as user with prefix, not system (prevents privilege escalation)
@@ -427,22 +529,34 @@ class AgentLoop(Plugin):
                     self.context.events.emit(USER_MESSAGE, {"content": safe_content, "provenance": "injection"})
             self.context.prompt_injections.clear()
 
+            # Inject array guidance if facts changed (bounded, controlled API)
+            if self._array_helper is not None and array_facts_changed and array_facts:
+                guidance = self._array_helper.build_guidance(array_facts)
+                if guidance:
+                    self.context.prompt_injections.append(
+                        Message("user", f"[array context] {guidance}")
+                    )
+
             if is_lite:
                 messages = self._compile_request_envelope(session_id, tool_guidance).messages
             else:
                 messages = self.context.messages
             if self.stream:
-                chunks = model.stream_chat(messages, self._tool_schemas)
+                chunks = model.stream_chat(messages, active_schemas)
                 response = self._consume_stream(chunks, on_stream=on_stream)
             else:
-                response = model.chat(messages, self._tool_schemas)
+                response = model.chat(messages, active_schemas)
 
             tool_calls = response.tool_calls or []
             # main.py registers OllamaToolCallParser under its own name
             # ("ollama_tool_call_parser"); accept the generic role name too.
             parser = self.context.plugins.get("ollama_tool_call_parser") or self.context.plugins.get("tool_call_parser")
             if not tool_calls and parser is not None and response.content:
-                tool_calls = parser.parse(response, self._tool_schemas) or []
+                tool_calls = parser.parse(response, active_schemas) or []
+
+            # Expand compact-schema logical calls (call_tool) into real tool calls
+            if tool_calls:
+                tool_calls = self._expand_compact_calls(tool_calls)
 
             # P0 FIX: Filter out duplicate-successful tool calls BEFORE appending assistant message.
             # This prevents small models from copying their own prior tool calls in the context.
@@ -507,6 +621,40 @@ class AgentLoop(Plugin):
                     continue
 
             if not tool_calls:
+                # App Completion Verifier gate: when the model declares completion
+                # (text response, no tool calls), run deterministic verification before
+                # allowing the agent to return. If verification fails, inject feedback
+                # and continue to the next round.
+                if self._app_verifier is not None:
+                    # Define criteria on first completion attempt
+                    if not task_state.get("verifier_criteria_defined"):
+                        self._app_verifier.define_criteria(user_text, task_state)
+                        task_state["verifier_criteria_defined"] = True
+
+                    workspace = self.context.config.get("workspace", ".") if self.context else "."
+                    all_passed = self._app_verifier.verify_completion(workspace, task_state)
+
+                    if not all_passed:
+                        feedback = self._app_verifier.get_feedback()
+                        # Inject as user message per injection-hardening invariant
+                        self.context.append_message("user", f"[verification feedback] {feedback}")
+                        if self.context is not None:
+                            self.context.events.emit("verification.failed", {
+                                "session_id": session_id,
+                                "failed_count": len([r for r in self._app_verifier._results if not r.passed]),
+                            })
+                        continue  # Keep working — don't return yet
+
+                    # All criteria passed
+                    if self.context is not None:
+                        self.context.events.emit("verification.passed", {
+                            "session_id": session_id,
+                            "total_criteria": len(self._app_verifier._criteria),
+                        })
+
+                # Mark session outcome for training data collection
+                self._mark_session_outcome(user_text, session_id, task_state)
+
                 self.context.events.emit("turn.end", {"final_result": response.content, "session_id": session_id})
                 return response.content
 
@@ -563,10 +711,34 @@ class AgentLoop(Plugin):
                     continue
 
                 try:
+                    # Optional ArrayHelper action review for write-related tools
+                    if self._array_helper is not None and name == "write_file" and array_facts:
+                        review = self._array_helper.review_action(name, args, array_facts)
+                        if review["status"] == "warn" and self.context is not None:
+                            self.context.events.emit("array.action.reviewed", {
+                                "session_id": session_id,
+                                "status": "warn",
+                                "reason": review["reason"],
+                            })
+                            # Inject bounded warning guidance
+                            warning = f"Array helper: {review['reason']}"
+                            self.context.prompt_injections.append(
+                                Message("user", f"[array context] {warning}")
+                            )
+
                     result = self._execute_tool_call(call)
                 except Exception as exc:
                     result = json.dumps({"error": str(exc), "tool": name, "arguments": args}, ensure_ascii=False)
                     failed_this_round.append(name)
+                    # Guide model away from non-existent tools after first failure
+                    if "Unknown tool" in str(exc):
+                        guidance = json.dumps({
+                            "role": "system",
+                            "content": f"Tool '{name}' does not exist. Respond with text instead of tools.",
+                        }, ensure_ascii=False)
+                        self.context.append_message("system", guidance)
+                        if self.context is not None:
+                            self.context.events.emit("system.message", {"content": guidance})
                     recovery = self.context.plugins.get("error_recovery")
                     if recovery is not None:
                         failure_type = self._classify_failure(exc, {"tool_name": name, "arguments": args}).value
@@ -596,6 +768,9 @@ class AgentLoop(Plugin):
                     })
                 else:
                     self._successful_calls.add(call_sig)
+                    # Compress tool results for compact-schema mode to save context tokens
+                    if self._schema_router is not None and getattr(self._schema_router, "compact_mode", False):
+                        result = self._schema_router.compress_result(result)
                     self.context.append_message("tool", result, tool_name=name)
                     if name not in task_state["tools_used"]:
                         task_state["tools_used"].append(name)
@@ -612,7 +787,25 @@ class AgentLoop(Plugin):
                     })
                     successful_results.append(result)
 
-            # Pre-existing: continue until model emits no tool_calls (not auto-done after first write) — enables multi-file app builds within 4k
+                    # Optional ArrayHelper context analysis after read_file
+                    if self._array_helper is not None and name == "read_file":
+                        context_analysis = self._array_helper.analyze_context(
+                            result[:self._array_helper._MAX_EXCERPT_LENGTH]
+                        )
+                        if context_analysis.get("confidence") in ("medium", "high"):
+                            merged_facts = {**array_facts, **context_analysis}
+                            if self._array_helper.update_facts(merged_facts):
+                                array_facts = merged_facts
+                                array_facts_changed = True
+                                if self.context is not None:
+                                    self.context.events.emit("array.context.updated", {
+                                        "session_id": session_id,
+                                        "representation": context_analysis.get("representation"),
+                                        "shape": context_analysis.get("shape"),
+                                        "confidence": context_analysis.get("confidence"),
+                                    })
+
+            # Pre-existing: continue until model emits no tool_calls (not auto-done after first write) — enables multi-file app builds within 33k
             if len(failed_this_round) > 1 and self._replan_count < 2:
                 replan_msg = RepairMessageBuilder.global_replan(failed_this_round)
                 self.context.append_message("system", replan_msg)
@@ -620,4 +813,79 @@ class AgentLoop(Plugin):
                     self.context.events.emit("replan", {"failed_tools": failed_this_round, "replan_count": self._replan_count})
 
         self.context.events.emit("turn.end", {"final_result": "", "error": "max_rounds_exceeded", "session_id": session_id})
+
+        # Mark session failure for training data collection
+        if self.context is not None:
+            self._mark_session_outcome_failure(user_text, session_id, task_state)
+
         raise ToolError(f"Agent exceeded maximum tool-call rounds ({self.max_rounds}).")
+
+    def _mark_session_outcome(self, user_text: str, session_id: str, task_state: dict[str, Any]) -> None:
+        """Mark the session outcome for training data collection.
+
+        Called when the agent successfully completes a task. If AppVerifier
+        is present and passed, outcome is "success". Otherwise "success"
+        (no verifier = trust model completion).
+        """
+        if self.context is None:
+            return
+        event_logger = self.context.plugins.get("event_logger")
+        if event_logger is None or not hasattr(event_logger, "mark_session_outcome"):
+            return
+
+        # Determine app type from user request
+        request_lower = user_text.lower()
+        if any(kw in request_lower for kw in {"todo", "task list"}):
+            app_type = "todo"
+        elif any(kw in request_lower for kw in {"auth", "login", "signup"}):
+            app_type = "auth"
+        elif any(kw in request_lower for kw in {"crud", "api", "endpoint"}):
+            app_type = "crud"
+        elif any(kw in request_lower for kw in {"calculat", "math", "sum", "total"}):
+            app_type = "calculator"
+        elif any(kw in request_lower for kw in {"dashboard", "chart"}):
+            app_type = "dashboard"
+        else:
+            app_type = "generic"
+
+        metadata: dict[str, Any] = {
+            "files_created": task_state.get("files_touched", []),
+            "tools_used": task_state.get("tools_used", []),
+            "app_type": app_type,
+            "model_turns": self._round,
+        }
+        event_logger.mark_session_outcome("success", metadata)
+
+    def _mark_session_outcome_failure(self, user_text: str, session_id: str, task_state: dict[str, Any]) -> None:
+        """Mark the session as failed for training data collection.
+
+        Called when the agent fails to complete a task (e.g., max rounds exceeded).
+        """
+        if self.context is None:
+            return
+        event_logger = self.context.plugins.get("event_logger")
+        if event_logger is None or not hasattr(event_logger, "mark_session_outcome"):
+            return
+
+        request_lower = user_text.lower()
+        if any(kw in request_lower for kw in {"todo", "task list"}):
+            app_type = "todo"
+        elif any(kw in request_lower for kw in {"auth", "login", "signup"}):
+            app_type = "auth"
+        elif any(kw in request_lower for kw in {"crud", "api", "endpoint"}):
+            app_type = "crud"
+        elif any(kw in request_lower for kw in {"calculat", "math", "sum", "total"}):
+            app_type = "calculator"
+        elif any(kw in request_lower for kw in {"dashboard", "chart"}):
+            app_type = "dashboard"
+        else:
+            app_type = "generic"
+
+        metadata: dict[str, Any] = {
+            "files_created": task_state.get("files_touched", []),
+            "tools_used": task_state.get("tools_used", []),
+            "app_type": app_type,
+            "model_turns": self._round,
+            "failure_reason": "max_rounds_exceeded",
+        }
+        event_logger.mark_session_outcome("failure", metadata)

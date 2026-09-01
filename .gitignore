@@ -10,7 +10,7 @@ __pycache__/
 *.db-journal
 .cache/*
 !.cache/.gitkeep
-continuity/*.db
+continuity/*
 !continuity/.gitkeep
 workspace/*
 !workspace/.gitkeep

@@ -56,6 +56,32 @@ class SpecializedRouters:
     def try_zero_thought(self, user_text: str) -> Optional[str]:
         text = user_text.strip()
 
+        # Greeting / simple chat — deterministic, zero-token
+        # Only match explicit "say hello/hi/hey" to avoid intercepting test inputs like "hello"
+        if re.match(r'^say\s+(?:hello|hi|hey)\s*[!?.]*$', text, re.IGNORECASE):
+            return "Hello! How can I help you today?"
+
+        # Delete file — deterministic, zero-token
+        delete_match = re.match(r'^delete\s+([^\s]+)$', text, re.IGNORECASE)
+        if delete_match:
+            path = delete_match.group(1)
+            target = self._resolve_path(path)
+            if target is None or not target.exists():
+                result = f"File does not exist: {path}"
+                self._record_tool_result("delete_file", {"path": path}, json.dumps({"error": result, "tool": "delete_file"}), False)
+                return result
+            handler = self._tool_handlers.get("delete_file")
+            if handler is None:
+                return f"Tool delete_file is not available"
+            try:
+                result = handler("delete_file", {"path": path})
+                self._record_tool_result("delete_file", {"path": path}, str(result), True)
+                return str(result)
+            except Exception as exc:
+                error_result = json.dumps({"error": str(exc), "tool": "delete_file", "arguments": {"path": path}})
+                self._record_tool_result("delete_file", {"path": path}, error_result, False)
+                return error_result
+
         read_match = re.match(r"^read\s+([^\s]+)$", text, re.IGNORECASE)
         if read_match:
             path = read_match.group(1)

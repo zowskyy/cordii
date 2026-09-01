@@ -28,7 +28,7 @@ Runs both suites and asserts the counts above. Add `-SkipLive` to run only the d
 
 ## Invariants Proven
 - **1.5B stability** — single-pruner token+message pass, tool-result truncation to calibrated byte cap
-- **4k context hygiene** — pruner budget 3000, KV headroom 1000, folds trigger on tokens OR messages
+- **33k context hygiene** — pruner budget 30000, KV headroom ~2768, folds trigger on tokens OR messages
 - **Zero-token `lite`** — 19 plugins, deterministic routing only, no LLM calls unless `full` + `--enable-semantic-router`
 - **Calibration centralization** — `validate_calibration()` wired into `resolve_calibration()`; all per-model numbers sourced from `core/context.py` `MODEL_PRESETS`
 - **Profile isolation** — `lite` excludes `semantic_router` and `embedding_model`; `AgentLoop._semantic_router` is `None`

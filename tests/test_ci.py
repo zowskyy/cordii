@@ -7,7 +7,7 @@ from plugins.ci.ci_plugin import CIPlugin, CIRun
 
 def test_ci_plugin_defaults():
     plugin = CIPlugin()
-    assert plugin._repo == "zowskyy/cordii"
+    assert plugin._repo is None
     assert plugin._workflow == "Long-Horizon Benchmark.yml"
     assert plugin._runs == []
     assert plugin.get_status()["status"] == "unknown"

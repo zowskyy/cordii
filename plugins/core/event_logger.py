@@ -24,8 +24,7 @@ class EventLogger(Plugin):
         super().register(context)
         self._event_log = EventLog(self._db_path)
         self._continuity = Continuity(self._event_log)
-        context.plugins["event_log"] = self._event_log
-        context.plugins["continuity"] = self._continuity
+        # Access via ctx.plugins["event_logger"].event_log / .continuity per invariant 2.5
 
     def start(self) -> None:
         if self.context is not None:
@@ -38,11 +37,13 @@ class EventLogger(Plugin):
             self.context.events.on("memory.augmented", self._on_memory_augmented)
             self.context.events.on("replan", self._on_replan)
             self.context.events.on("turn.start", self._on_turn_start)
+            self.context.events.on("turn.round", self._on_turn_round)
             self.context.events.on("turn.end", self._on_turn_end)
             self.context.events.on("ci.status.updated", self._on_ci_status)
             self.context.events.on("math.solved", self._on_math_solved)
             self.context.events.on("lifecycle.consolidated", self._on_lifecycle_consolidated)
             self.context.events.on("persona.updated", self._on_persona_updated)
+            self.context.events.on("protected_file.violation", self._on_protected_file_violation)
 
     def stop(self) -> None:
         self._continuity.end_session()
@@ -75,6 +76,9 @@ class EventLogger(Plugin):
     def _on_turn_start(self, event) -> None:
         self.emit("turn.start", event.payload or {})
 
+    def _on_turn_round(self, event) -> None:
+        self.emit("turn.round", event.payload or {})
+
     def _on_turn_end(self, event) -> None:
         self.emit("turn.end", event.payload or {})
 
@@ -90,6 +94,9 @@ class EventLogger(Plugin):
     def _on_persona_updated(self, event) -> None:
         self.emit("persona.updated", event.payload or {})
 
+    def _on_protected_file_violation(self, event) -> None:
+        self.emit("protected_file.violation", event.payload or {})
+
     def emit(self, event_type: str, payload: dict[str, object]) -> None:
         event = Event(
             type=event_type,
@@ -98,6 +105,28 @@ class EventLogger(Plugin):
             payload=payload,
         )
         self._event_log.append(event)
+
+    def mark_session_outcome(self, outcome: str, metadata: dict[str, Any] | None = None) -> int:
+        """Record the outcome of a session for training data collection.
+
+        Args:
+            outcome: "success", "partial", or "failure".
+            metadata: Additional data (files_created, tools_used, model_turns, app_type, etc.).
+
+        Returns:
+            Row ID of the inserted outcome event.
+        """
+        return self._event_log.mark_session_outcome(self._continuity.session_id, outcome, metadata)
+
+    def get_session_outcome(self, session_id: str) -> dict[str, Any] | None:
+        """Retrieve the outcome event for a session, if one exists."""
+        rows = self._event_log.query(
+            "SELECT payload FROM events WHERE session_id = ? AND type = 'session.outcome' ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        )
+        if not rows:
+            return None
+        return json.loads(rows[0][0])
 
     def start_step(self, tool_name: str, arguments: dict[str, Any]) -> TraceStep:
         self._step_counter += 1

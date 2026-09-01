@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
+import zlib
 from pathlib import Path
 
 from core.event_log import EventLog
@@ -71,3 +73,20 @@ def test_reality_summary_shape():
     summary = reality.summary()
     assert summary["message_count"] == 1
     assert summary["error_count"] == 0
+
+
+def test_snapshot_format_is_base64_zlib():
+    """Invariant 2.9: snapshots must be base64 + zlib compressed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "test.db"
+        with EventLog(db) as log:
+            log.save_snapshot("s1", 1, {"messages": ["hello world"]}, compress=True)
+            row = log._conn.execute(
+                "SELECT state, compressed FROM snapshots WHERE stream_id = ?", ("s1",)
+            ).fetchone()
+            assert row is not None
+            raw_state, compressed_flag = row
+            assert compressed_flag == 1
+            decoded = base64.b64decode(raw_state.encode("ascii"))
+            decompressed = zlib.decompress(decoded).decode()
+            assert json.loads(decompressed) == {"messages": ["hello world"]}

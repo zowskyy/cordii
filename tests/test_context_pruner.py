@@ -63,7 +63,7 @@ def test_pruner_returns_metrics():
 
 
 def test_pruner_token_pass_when_under_message_limit():
-    """4k window: under the message cap, a few LARGE messages can still
+    """33k window: under the message cap, a few LARGE messages can still
     exceed the token budget. The token pass drops lowest-score messages
     (leading system + two most recent protected) until within budget, and
     keeps assistant+tool_calls alive while a cheaper target exists."""

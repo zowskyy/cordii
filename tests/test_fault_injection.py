@@ -9,15 +9,13 @@ from core.errors import ToolError
 def test_inject_timeout_raises_within_probability():
     injector = FaultInjector()
     with pytest.raises(ToolError, match="Simulated timeout"):
-        for _ in range(100):
-            injector.inject_timeout("file_read", probability=1.0)
+        injector.inject_timeout("file_read", probability=1.0)
 
 
 def test_inject_malformed_args_raises_within_probability():
     injector = FaultInjector()
     with pytest.raises(ToolError, match="Simulated malformed args"):
-        for _ in range(100):
-            injector.inject_malformed_args("file_write", probability=1.0)
+        injector.inject_malformed_args("file_write", probability=1.0)
 
 
 def test_inject_timeout_respects_probability():
@@ -45,8 +43,7 @@ def test_inject_stale_context_clears_messages():
     ctx = FakeContext()
     ctx.append_message("user", "hello")
     ctx.append_message("assistant", "world")
-    for _ in range(100):
-        injector.inject_stale_context(ctx, probability=1.0)
+    injector.inject_stale_context(ctx, probability=1.0)
     assert len(ctx.messages) == 1
     assert ctx.messages[0]["content"] == "Context was reset due to stale state."
 

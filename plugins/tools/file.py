@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.errors import ToolError, WorkspaceError
 from core.plugin import Plugin
+
+if TYPE_CHECKING:
+    from core.context import Context
 
 
 class FileTools(Plugin):
@@ -27,9 +30,59 @@ class FileTools(Plugin):
         self.workspace = Path(workspace).expanduser().resolve()
         self.max_read_bytes = max_read_bytes
         self.max_write_bytes = max_write_bytes
+        # Files protected from write/delete/rename at the tool boundary.
+        # AGENTS.md is always protected (canonical instructions).
+        # Additional files configurable via context config["protected_files"].
+        self._protected_files: set[str] = {"AGENTS.md"}
+        self._protected_paths: set[Path] = set()
+        self._context: Context | None = None
+
+    def register(self, context: Any) -> None:
+        super().register(context)
+        self._context = context
+        # Merge user-configured protected files
+        extra = context.config.get("protected_files", []) if context and context.config else []
+        if isinstance(extra, list):
+            self._protected_files.update(extra)
+        # Pre-resolve protected paths so _resolve can check efficiently
+        for name in self._protected_files:
+            try:
+                resolved = (self.workspace / name).resolve()
+                self._protected_paths.add(resolved)
+            except (OSError, ValueError):
+                pass
+
+    def _emit_violation(self, path: str, operation: str) -> None:
+        """Emit protected_file.violation event if EventBus is available."""
+        if self._context is not None:
+            self._context.events.emit("protected_file.violation", {
+                "file": path,
+                "operation": operation,
+                "protected_files": sorted(self._protected_files),
+            })
+
+    def _check_protected(self, user_path: str, resolved: Path) -> None:
+        """Raise ToolError if the resolved path matches a protected file."""
+        # Check by resolved path match
+        if resolved in self._protected_paths:
+            self._emit_violation(user_path, "access")
+            raise ToolError(f"Protected file cannot be modified: {user_path}")
+        # Also check by name match (covers symlinks / parent escapes)
+        name = Path(user_path.strip().replace("\\", "/")).name
+        if name in self._protected_files:
+            self._emit_violation(user_path, "access")
+            raise ToolError(f"Protected file cannot be modified: {user_path}")
 
     def start(self) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
+
+    def health_check(self) -> dict[str, Any]:
+        """Verify the tool layer integrity: workspace exists, protected files enforced."""
+        return {
+            "healthy": self.workspace.exists(),
+            "protected_files_enforced": len(self._protected_files) > 0,
+            "protected_count": len(self._protected_files),
+        }
 
     def _resolve(self, user_path: str) -> Path:
         if not isinstance(user_path, str) or not user_path.strip():
@@ -42,6 +95,8 @@ class FileTools(Plugin):
             resolved.relative_to(self.workspace)
         except ValueError as exc:
             raise WorkspaceError(f"Path escapes workspace: {user_path!r}") from exc
+        # Enforce protected files at the filesystem/tool boundary
+        self._check_protected(user_path, resolved)
         return resolved
 
     def read_file(self, path: str) -> str:
@@ -57,6 +112,20 @@ class FileTools(Plugin):
             raise ToolError(f"File is not valid UTF-8: {path}") from exc
         except OSError as exc:
             raise ToolError(f"Could not read {path}: {exc}") from exc
+
+    def delete_file(self, path: str) -> str:
+        """Delete a file from the workspace. Raises ToolError if not found."""
+        target = self._resolve(path)
+        if not target.exists():
+            raise ToolError(f"File does not exist: {path}")
+        try:
+            if target.is_file():
+                target.unlink()
+            elif target.is_dir():
+                raise ToolError(f"Path is a directory, not a file: {path}")
+        except OSError as exc:
+            raise ToolError(f"Could not delete {path}: {exc}") from exc
+        return f"Deleted {path}"
 
     def write_file(self, path: str, content: str) -> str:
         if not isinstance(content, str):
@@ -105,6 +174,7 @@ class FileTools(Plugin):
         return [
             {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 text file inside the workspace.", "parameters": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}}}}},
             {"type": "function", "function": {"name": "write_file", "description": "Write UTF-8 text to a workspace-relative file.", "parameters": {"type": "object", "required": ["path", "content"], "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}, "content": {"type": "string", "description": "Complete UTF-8 file contents."}}}}},
+            {"type": "function", "function": {"name": "delete_file", "description": "Delete a file from the workspace.", "parameters": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}}}}},
             {"type": "function", "function": {"name": "list_directory", "description": "List entries in a workspace-relative directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Workspace-relative directory path; defaults to '.'."}}}}},
             {"type": "function", "function": {"name": "read_json", "description": "Read and parse a JSON file inside the workspace.", "parameters": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "description": "Workspace-relative JSON file path."}}}}},
         ]
@@ -116,6 +186,8 @@ class FileTools(Plugin):
             return self.read_file(str(arguments["path"]))
         if name == "write_file":
             return self.write_file(str(arguments["path"]), str(arguments["content"]))
+        if name == "delete_file":
+            return self.delete_file(str(arguments["path"]))
         if name == "list_directory":
             return json.dumps(self.list_directory(str(arguments.get("path", "."))))
         if name == "read_json":

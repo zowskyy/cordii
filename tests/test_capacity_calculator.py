@@ -13,9 +13,11 @@ def test_capacity_calculator_diff_mode():
     from scripts.capacity_calculator import main
 
     left = {
-        "1.5b": {"label": "qwen2.5-coder:1.5b (4k, flaky)", "max_tokens": 4096, "pruner_budget": 3000, "safety": 0.85, "max_messages": 40, "rounds_per_file": 1.3, "max_tool_result_bytes": 8192},
-        "7b": {"label": "qwen2.5-coder:7b (8k, stable)", "max_tokens": 8192, "pruner_budget": 6500, "safety": 0.88, "max_messages": 60, "rounds_per_file": 1.05, "max_tool_result_bytes": 16384},
+        key: dict(values) for key, values in MODEL_PRESETS.items()
     }
+    # Introduce deliberate diffs so the diff mode exercises formatting
+    left["1.5b"]["pruner_budget"] = 2999
+    left["7b"]["max_messages"] = 59
     right = dict(MODEL_PRESETS)
 
     sys.argv = ["capacity_calculator.py", "--diff", json.dumps(left), json.dumps(right)]

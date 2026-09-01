@@ -81,8 +81,10 @@ class PluginRegistry:
     def start_all(self) -> None:
         self.resolve_all()
         started: list[str] = []
+        last_name = "<unknown>"
         try:
             for name in self._order:
+                last_name = name
                 self._plugins[name].start()
                 started.append(name)
         except Exception as exc:
@@ -91,7 +93,7 @@ class PluginRegistry:
                     self._plugins[name].stop()
                 except Exception:
                     pass
-            raise PluginError(f"Plugin startup failed: {name}") from exc
+            raise PluginError(f"Plugin startup failed: {last_name}") from exc
 
         health_monitor = self._plugins.get("health_monitoring")
         if health_monitor is not None:

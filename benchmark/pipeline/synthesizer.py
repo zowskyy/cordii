@@ -90,7 +90,7 @@ class Synthesizer:
             )
         finally:
             reg.stop_all()
-            ctx.plugins["event_log"].close()
+            ctx.plugins["event_logger"].event_log.close()
             shutil.rmtree(workspace, ignore_errors=True)
 
     def _setup_workspace(self, task: GeneratedTask) -> str:
@@ -107,9 +107,10 @@ class Synthesizer:
         return workspace
 
     def _build_agent_trace(self, ctx: Context, task: GeneratedTask, result_text: str = "") -> Dict[str, Any]:
-        cont = ctx.plugins.get("continuity")
-        session_id = cont.session_id if cont and hasattr(cont, "session_id") else "default"
-        events = ctx.plugins["event_log"].get_session_events(session_id)
+        el = ctx.plugins["event_logger"]
+        cont = el.continuity
+        session_id = cont.session_id if hasattr(cont, "session_id") else "default"
+        events = el.event_log.get_session_events(session_id)
         invocations = [e for e in events if e.type == "tool.invoked"]
         results = [e for e in events if e.type == "tool.result"]
 

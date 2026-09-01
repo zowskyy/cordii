@@ -7,6 +7,7 @@ import requests
 
 from core.errors import ModelError
 from core.messages import Message
+from core.metrics import TokenUsage
 from core.plugin import Plugin
 from core.tool_call_extraction import extract_tool_calls_from_text
 
@@ -24,6 +25,7 @@ class OllamaModel(Plugin):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.last_token_usage: TokenUsage | None = None
 
     def _post(self, path: str, payload: dict[str, Any], stream: bool = False) -> Any:
         try:
@@ -59,6 +61,14 @@ class OllamaModel(Plugin):
             except json.JSONDecodeError:
                 continue
 
+    def _extract_token_usage(self, data: dict[str, Any]) -> TokenUsage:
+        prompt_eval_count = data.get("prompt_eval_count") or 0
+        eval_count = data.get("eval_count") or 0
+        return TokenUsage(
+            prompt_eval_count=prompt_eval_count,
+            eval_count=eval_count,
+        )
+
     def chat(
         self,
         messages: list[Message],
@@ -80,6 +90,8 @@ class OllamaModel(Plugin):
                 data = self._request(payload)
             else:
                 raise
+
+        self.last_token_usage = self._extract_token_usage(data)
 
         raw_message = data.get("message")
         if not isinstance(raw_message, dict):
@@ -111,6 +123,7 @@ class OllamaModel(Plugin):
         current_role: Optional[str] = None
         current_content = ""
         current_tool_calls: list[dict[str, Any]] = []
+        last_data: dict[str, Any] = {}
 
         for chunk in self._stream_chunks(payload):
             message = chunk.get("message", {})
@@ -125,6 +138,8 @@ class OllamaModel(Plugin):
             if tool_calls_delta:
                 current_tool_calls.extend(tool_calls_delta)
 
+            last_data = chunk
+
             yield Message(
                 role=current_role or "assistant",
                 content=current_content,
@@ -133,6 +148,9 @@ class OllamaModel(Plugin):
 
             if chunk.get("done"):
                 break
+
+        if last_data:
+            self.last_token_usage = self._extract_token_usage(last_data)
 
     def list_models(self) -> list[str]:
         response = self._post("/api/tags", {})

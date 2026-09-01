@@ -82,9 +82,10 @@ def run_canary(model_name: str = "qwen2.5-coder:1.5b", task_name: str = "simple_
         result_text = ctx.plugins["agent_loop"].run(task.user_input)
         elapsed = time.time() - start
 
-        cont = ctx.plugins.get("continuity")
-        session_id = cont.session_id if cont and hasattr(cont, "session_id") else "default"
-        events = ctx.plugins["event_log"].get_session_events(session_id)
+        el = ctx.plugins["event_logger"]
+        cont = el.continuity
+        session_id = cont.session_id if hasattr(cont, "session_id") else "default"
+        events = el.event_log.get_session_events(session_id)
         invocations = [e for e in events if e.type == "tool.invoked"]
         results = [e for e in events if e.type == "tool.result"]
 
@@ -125,7 +126,7 @@ def run_canary(model_name: str = "qwen2.5-coder:1.5b", task_name: str = "simple_
         }
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
         shutil.rmtree(workspace, ignore_errors=True)
 
 

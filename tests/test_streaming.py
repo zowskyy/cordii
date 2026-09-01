@@ -61,7 +61,7 @@ def test_agent_loop_streaming(tmp_path):
         assert received == ["Hello", "Hello world", "Hello world!"]
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
 
 
 def test_agent_loop_streaming_with_tool_calls(tmp_path):
@@ -87,10 +87,9 @@ def test_agent_loop_streaming_with_tool_calls(tmp_path):
     try:
         result = ctx.plugins["agent_loop"].run("write file", on_stream=on_stream)
         assert result == "done"
-        assert any("write_file" in str(c) for c in received) or True
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
 
 
 def test_agent_loop_non_streaming(tmp_path):
@@ -114,4 +113,4 @@ def test_agent_loop_non_streaming(tmp_path):
         assert received == []
     finally:
         reg.stop_all()
-        ctx.plugins["event_log"].close()
+        ctx.plugins["event_logger"].event_log.close()
