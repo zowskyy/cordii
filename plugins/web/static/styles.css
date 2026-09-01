@@ -1,0 +1,222 @@
+:root {
+    --bg: #0f1115;
+    --panel-bg: #13161c;
+    --border: #1f2530;
+    --text: #e6e8ee;
+    --muted: #9aa0ad;
+    --accent: #4f8cff;
+    --danger: #ff5f6d;
+    --ok: #2dd4a8;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}
+
+.app {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+}
+
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-bg);
+}
+
+.app-header h1 {
+    font-size: 16px;
+    margin: 0;
+    letter-spacing: 0.2px;
+}
+
+.header-meta {
+    display: flex;
+    gap: 8px;
+}
+
+.badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--border);
+    color: var(--muted);
+}
+
+.badge.ok { color: var(--ok); }
+.badge.danger { color: var(--danger); }
+
+.app-main {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    min-height: 0;
+}
+
+.sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--panel-bg);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+}
+
+.panel h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 8px;
+}
+
+.session-list,
+.model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.session-item,
+.model-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #0b0d12;
+}
+
+.session-item.active,
+.model-item.active {
+    border-color: var(--accent);
+}
+
+.session-item button,
+.model-item button {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 8px;
+    cursor: pointer;
+}
+
+.session-item button:hover,
+.model-item button:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.chat {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.message {
+    max-width: 860px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: #0b0d12;
+}
+
+.message.user {
+    align-self: flex-end;
+    background: #11141a;
+}
+
+.message.assistant {
+    align-self: flex-start;
+}
+
+.message.system {
+    align-self: center;
+    color: var(--muted);
+}
+
+.message .meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+}
+
+.message .content {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.chat-form {
+    display: flex;
+    gap: 8px;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--panel-bg);
+}
+
+.chat-form input {
+    flex: 1;
+    background: #0b0d12;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.chat-form button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+}
+
+.empty {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.metrics {
+    background: #0b0d12;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    color: var(--muted);
+    font-size: 12px;
+    max-height: 240px;
+    overflow: auto;
+}
+
+button.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 10px;
+    cursor: pointer;
+}

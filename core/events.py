@@ -16,12 +16,20 @@ SYSTEM_MESSAGE = "system.message"
 TOOL_INVOKED = "tool.invoked"
 TOOL_RESULT = "tool.result"
 TOOL_ERROR = "tool.error"
+TOOL_CALL_START = "tool.call.start"
+TOOL_CALL_END = "tool.call.end"
+TOOL_RESULT_PRUNED = "tool.result.pruned"
+TOOL_RESULT_SPILLED = "tool.result.spilled"
 TASK_START = "task.start"
 TASK_END = "task.end"
 GEN_START = "gen.start"
 GEN_COMPLETE = "gen.complete"
 GEN_SENT = "gen.sent"
 STEP_TRACE = "step.trace"
+SESSION_LIST = "session.list"
+SESSION_DELETED = "session.deleted"
+DOMAIN_CHANGED = "domain.changed"
+TOOLS_CHANGED = "tools.change"
 
 
 EventType = Literal[
@@ -33,6 +41,10 @@ EventType = Literal[
     "tool.invoked",
     "tool.result",
     "tool.error",
+    "tool.call.start",
+    "tool.call.end",
+    "tool.result.pruned",
+    "tool.result.spilled",
     "model.requested",
     "model.responded",
     "manifest_bound",
@@ -42,6 +54,10 @@ EventType = Literal[
     "task.start",
     "task.end",
     "step.trace",
+    "session.list",
+    "session.deleted",
+    "domain.changed",
+    "tools.change",
 ]
 
 
@@ -71,6 +87,8 @@ class Event:
     task_id: str | None = None
     parent_event_id: int | None = None
     operation_id: str | None = None
+    prev_hash: str | None = None
+    entry_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +100,8 @@ class Event:
             "parent_event_id": self.parent_event_id,
             "operation_id": self.operation_id,
             "payload": self.payload,
+            "prev_hash": self.prev_hash,
+            "entry_hash": self.entry_hash,
         }
 
     @classmethod
@@ -95,6 +115,8 @@ class Event:
             parent_event_id=row[5],
             operation_id=row[6],
             payload=json.loads(row[7]) if row[7] else {},
+            prev_hash=row[8] if len(row) > 8 else None,
+            entry_hash=row[9] if len(row) > 9 else None,
         )
 
 

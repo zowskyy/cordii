@@ -38,6 +38,11 @@ from plugins.core.linting import LintingPlugin
 from plugins.core.logic_layer import LogicLayerPlugin
 from plugins.core.intent_router import IntentRouterPlugin
 from plugins.core.summarizer import SummarizerPlugin
+from plugins.core.deterministic_knowledge import DeterministicKnowledgeStore
+from plugins.core.batch_cache import BatchCache
+from plugins.core.decision_logger import DecisionLogger
+from plugins.core.tool_result_pruner import ToolResultPruner
+from plugins.web.server import WebDashboard
 from plugins.ci.ci_plugin import CIPlugin
 from plugins.math.router import MathRouterPlugin
 from plugins.math.symbolic_engine import SymbolicEnginePlugin
@@ -130,10 +135,19 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
     reg.register(AppVerifier())
     # Single pruner (30k budget for 33k ctx) — needed even in lite
     reg.register(ContextPrunerPlugin())
+    # Deterministic knowledge store (zero-token TF-IDF, lite-safe)
+    reg.register(DeterministicKnowledgeStore())
+    # Batch cache (zero-token content-hash memoization, lite-safe)
+    reg.register(BatchCache())
+    # Decision logger (zero-token JSONL logging for routing and tool decisions)
+    reg.register(DecisionLogger())
+    # Tool result pruner (zero-token compaction/spill for oversized tool results)
+    reg.register(ToolResultPruner())
     # Core loop + data export for fine-tuning (zero-token, deterministic)
     reg.register(AgentLoop())
     reg.register(DataExporter())
     reg.register(TerminalUI())
+    reg.register(WebDashboard())
 
     if profile == "full":
         # Observability / extended memory — only in full
@@ -166,8 +180,8 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         # Semantic router not registered in lite at all — zero embedding cost
         pass
 
-    expected_lite = 24
-    expected_full = 47
+    expected_lite = 29
+    expected_full = 52
     actual = len(ctx.plugins)
     if profile == "lite":
         assert actual == expected_lite, f"Lite profile: expected {expected_lite} plugins, got {actual}"
@@ -179,6 +193,11 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         assert "app_verifier" in ctx.plugins, "AppVerifier should be registered in lite"
         assert "data_exporter" in ctx.plugins, "DataExporter should be registered in lite"
         assert "asgi_wsgi_tester" in ctx.plugins, "ASGIWSGITester should be registered in lite"
+        assert "deterministic_knowledge" in ctx.plugins, "DeterministicKnowledgeStore should be registered in lite"
+        assert "batch_cache" in ctx.plugins, "BatchCache should be registered in lite"
+        assert "decision_logger" in ctx.plugins, "DecisionLogger should be registered in lite"
+        assert "web_dashboard" in ctx.plugins, "WebDashboard should be registered in lite"
+        assert "tool_result_pruner" in ctx.plugins, "ToolResultPruner should be registered in lite"
     elif profile == "full":
         assert actual == expected_full, f"Full profile: expected {expected_full}plugins, got {actual}"
         assert "schema_router" in ctx.plugins, "SchemaRouter should be registered in full"
@@ -186,6 +205,11 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         assert "data_exporter" in ctx.plugins, "DataExporter should be registered in full"
         assert "asgi_wsgi_tester" in ctx.plugins, "ASGIWSGITester should be registered in full"
         assert "array_helper" in ctx.plugins, "ArrayHelper should be registered in full"
+        assert "deterministic_knowledge" in ctx.plugins, "DeterministicKnowledgeStore should be registered in full"
+        assert "batch_cache" in ctx.plugins, "BatchCache should be registered in full"
+        assert "decision_logger" in ctx.plugins, "DecisionLogger should be registered in full"
+        assert "web_dashboard" in ctx.plugins, "WebDashboard should be registered in full"
+        assert "tool_result_pruner" in ctx.plugins, "ToolResultPruner should be registered in full"
         if enable_semantic_router:
             assert ctx.plugins["semantic_router"].enabled is True, "SemanticRouter should be enabled"
         else:

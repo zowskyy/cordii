@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -10,10 +11,11 @@ from core.context import Context
 from core.calibration import MODEL_PRESETS, DEFAULT_PRESET_KEY, calibration_from_context
 from core.context_pruner import ContextPruner, PrunedContext
 from core.errors import ToolError
-from core.events import Manifest, SYSTEM_MESSAGE, USER_MESSAGE
+from core.events import Manifest, SYSTEM_MESSAGE, USER_MESSAGE, TOOL_CALL_START, TOOL_CALL_END
 from core.failure_taxonomy import FailureClassifier, FailureType, PreFlightGuard
 from core.messages import Message
 from core.plugin import Plugin
+from core.retry import RetryPolicy, retry_with_backoff
 from core.reality import RealityProjector, RequestEnvelope
 from core.self_healing import BudgetedSelfHealing
 from core.summarizer import Summarizer
@@ -23,6 +25,7 @@ from plugins.agent.specialized_routers import RepairMessageBuilder, SpecializedR
 from plugins.agent.aggregate_response import AggregateResponse
 from plugins.agent.multi_domain_router import MultiDomainRouter
 from plugins.agent.schema_router import SchemaRouter
+from plugins.core.decision_logger import DecisionLogger
 
 # Back-compat alias (tests import it). The VALUE comes from the shared model
 # calibration table (core.context.MODEL_PRESETS), not a literal here: the
@@ -47,6 +50,7 @@ class AgentLoop(Plugin):
         self._round = 0
         self._healing = BudgetedSelfHealing()
         self._context_builder = None
+        self._retry_policy = RetryPolicy()
         # Built in start() from the active model calibration (core.context).
         self._context_pruner: ContextPruner | None = None
         self._token_budget = TOKEN_BUDGET
@@ -63,6 +67,7 @@ class AgentLoop(Plugin):
         self._schema_router: SchemaRouter | None = None
         self._array_helper: Any = None
         self._app_verifier: Any = None
+        self._decision_logger: DecisionLogger | None = None
 
     def start(self) -> None:
         assert self.context is not None
@@ -85,6 +90,10 @@ class AgentLoop(Plugin):
         self._multi_domain_router = self.context.plugins.get("multi_domain_router")
         self._aggregator = self.context.plugins.get("aggregate_response")
         self._app_verifier = self.context.plugins.get("app_verifier")
+        self._decision_logger = self.context.plugins.get("decision_logger")
+        if self._decision_logger is not None:
+            self._decision_logger.set_session_id(self._get_session_id())
+        self._tool_result_pruner = self.context.plugins.get("tool_result_pruner")
 
     def tool_schemas(self) -> list[dict[str, Any]]:
         return list(self._tool_schemas)
@@ -133,6 +142,37 @@ class AgentLoop(Plugin):
 
     def _record_fail(self, sig: str) -> None:
         self._failed_calls[sig] = self._failed_calls.get(sig, 0) + 1
+
+    def _log_routing_decision(self, decision_type: str, input_data: Any, output_data: Any) -> None:
+        if self._decision_logger is not None:
+            self._decision_logger.increment_turn()
+            self._decision_logger.log_decision(
+                decision_type=decision_type,
+                input_data=input_data,
+                output_data=output_data,
+                confidence=1.0,
+                duration_ms=0.0,
+                alternatives_considered=[],
+            )
+
+    def _log_tool_decision(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: str,
+        success: bool,
+        duration_ms: float = 0.0,
+        error: str | None = None,
+    ) -> None:
+        if self._decision_logger is not None:
+            self._decision_logger.log_decision(
+                decision_type="tool_selection",
+                input_data={"tool_name": tool_name, "arguments": arguments},
+                output_data={"result": result, "success": success, "error": error},
+                confidence=1.0 if success else 0.0,
+                duration_ms=duration_ms,
+                alternatives_considered=[],
+            )
 
     @staticmethod
     def _parse_arguments(raw: Any) -> dict[str, Any]:
@@ -201,10 +241,21 @@ class AgentLoop(Plugin):
 
         if self.context is not None:
             self.context.events.emit("tool.invoked", {"tool_name": name, "call_id": call_id, "arguments": arguments})
+            self.context.events.emit(TOOL_CALL_START, {"tool_name": name, "call_id": call_id, "arguments": arguments})
 
         try:
-            result = handler(name, arguments)
+            result = retry_with_backoff(
+                handler,
+                name,
+                arguments,
+                policy=self._retry_policy,
+                should_retry=lambda exc: self._classify_failure(
+                    exc, {"tool_name": name, "arguments": arguments}
+                ) in (FailureType.TRANSIENT, FailureType.ARGUMENT),
+            )
         except Exception as exc:
+            if self.context is not None:
+                self.context.events.emit(TOOL_CALL_END, {"tool_name": name, "call_id": call_id, "success": False, "error": str(exc)})
             if step is not None:
                 logger.finish_step(step, error=str(exc))
             self._record_fail(signature)
@@ -212,18 +263,31 @@ class AgentLoop(Plugin):
             self._quarantine(self.context, signature, exc)
             healing = self._healing.handle_failure(failure_type, {"tool_name": name, "arguments": arguments})
             action = healing.get("action", "abstain")
-            if action == "retry":
-                raise
-            repair = RepairMessageBuilder.build(name, failure_type, healing)
-            self.context.append_message("system", repair)
+            # retry_with_backoff already exhausted execution-layer retries;
+            # preserve historical behavior by skipping the repair message on
+            # retry-class failures.
+            if action != "retry":
+                repair = RepairMessageBuilder.build(name, failure_type, healing)
+                self.context.append_message("system", repair)
             raise
 
-        if step is not None:
-            verified = ToolResultVerifier.verify(name, arguments, result)
-            step.governance_check_passed = verified
-            logger.finish_step(step, output=result)
+        # Post-execute: prune or spill oversized results.
+        pruned_result = result
+        if self._tool_result_pruner is not None:
+            try:
+                pruned_result, _pruned, _spill = self._tool_result_pruner.prune(name, call_id, result)
+            except Exception:
+                pruned_result = result
 
-        return result
+        if step is not None:
+            verified = ToolResultVerifier.verify(name, arguments, pruned_result)
+            step.governance_check_passed = verified
+            logger.finish_step(step, output=pruned_result)
+
+        if self.context is not None:
+            self.context.events.emit(TOOL_CALL_END, {"tool_name": name, "call_id": call_id, "success": True})
+
+        return pruned_result
 
     def _get_session_id(self) -> str:
         event_logger = self.context.plugins.get("event_logger") if self.context else None
@@ -384,6 +448,7 @@ class AgentLoop(Plugin):
         if not self._multi_domain_results:
             fast_result = self._routers.try_zero_thought(user_text) if self._routers else None
             if fast_result is not None:
+                self._log_routing_decision("zero_thought", user_text, fast_result)
                 return fast_result
 
             # P0 FIX: SemanticRouter is gated (default OFF) to preserve zero-token guarantee
@@ -391,18 +456,22 @@ class AgentLoop(Plugin):
             if self._semantic_router is not None and getattr(self._semantic_router, "enabled", False):
                 semantic_result = self._semantic_router.route(user_text)
                 if semantic_result is not None:
+                    self._log_routing_decision("semantic_router", user_text, semantic_result)
                     return semantic_result
 
             math_result = try_math_router(user_text, self.context)
             if math_result is not None:
+                self._log_routing_decision("math_router", user_text, math_result)
                 return math_result
 
             datetime_result = try_datetime_router(user_text, self.context)
             if datetime_result is not None:
+                self._log_routing_decision("datetime_router", user_text, datetime_result)
                 return datetime_result
 
             units_result = try_units_router(user_text, self.context)
             if units_result is not None:
+                self._log_routing_decision("units_router", user_text, units_result)
                 return units_result
 
         if self._multi_domain_results:
@@ -711,6 +780,7 @@ class AgentLoop(Plugin):
                     continue
 
                 try:
+                    start_time = time.perf_counter()
                     # Optional ArrayHelper action review for write-related tools
                     if self._array_helper is not None and name == "write_file" and array_facts:
                         review = self._array_helper.review_action(name, args, array_facts)
@@ -727,9 +797,12 @@ class AgentLoop(Plugin):
                             )
 
                     result = self._execute_tool_call(call)
+                    duration_ms = (time.perf_counter() - start_time) * 1000.0
+                    self._log_tool_decision(name, args, result, success=True, duration_ms=duration_ms)
                 except Exception as exc:
                     result = json.dumps({"error": str(exc), "tool": name, "arguments": args}, ensure_ascii=False)
                     failed_this_round.append(name)
+                    self._log_tool_decision(name, args, result, success=False, error=str(exc))
                     # Guide model away from non-existent tools after first failure
                     if "Unknown tool" in str(exc):
                         guidance = json.dumps({

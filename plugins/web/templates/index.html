@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cordi v2 Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app">
+        <header class="app-header">
+            <h1>Cordi v2</h1>
+            <div class="header-meta">
+                <span id="connection-status" class="badge">connecting</span>
+                <span id="active-session" class="badge">no session</span>
+            </div>
+        </header>
+        <main class="app-main">
+            <aside class="sidebar">
+                <section class="panel">
+                    <h2>Sessions</h2>
+                    <div id="session-list" class="session-list">
+                        <div class="empty">Loading…</div>
+                    </div>
+                    <button id="refresh-sessions" class="secondary">Refresh</button>
+                </section>
+                <section class="panel">
+                    <h2>Models</h2>
+                    <div id="model-list" class="model-list">
+                        <div class="empty">Loading…</div>
+                    </div>
+                </section>
+                <section class="panel">
+                    <h2>Metrics</h2>
+                    <pre id="metrics" class="metrics">Loading…</pre>
+                </section>
+            </aside>
+            <section class="chat">
+                <div id="chat-messages" class="chat-messages">
+                    <div class="empty">Select or create a session to begin.</div>
+                </div>
+                <form id="chat-form" class="chat-form">
+                    <input id="chat-input" type="text" placeholder="Send a message…" autocomplete="off" />
+                    <button type="submit">Send</button>
+                </form>
+            </section>
+        </main>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

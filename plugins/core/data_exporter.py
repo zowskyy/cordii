@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -26,11 +27,12 @@ class DataExporter(EventDrivenPlugin):
         self.dependencies = ("event_logger",)
         self.__contract__ = {
             "version": "1.0",
-            "capabilities": ["export_jsonl", "trajectory_reconstruct", "quality_filter"],
+            "capabilities": ["export_jsonl", "trajectory_reconstruct", "quality_filter", "delta_export"],
             "zero_token": True,
         }
         self._event_log: Optional[EventLog] = None
         self._run_state: dict[str, Any] = {}
+        self._state_file: Path | None = None
 
     def start(self) -> None:
         """Initialize the exporter with access to the event log."""
@@ -45,19 +47,23 @@ class DataExporter(EventDrivenPlugin):
             self._event_log = event_logger._event_log
         else:
             self._event_log = None
+        # Delta export state file location
+        workspace = Path(self.context.config.get("workspace", "workspace")) if self.context else Path("workspace")
+        self._state_file = workspace / ".data_exporter_state.json"
 
     def health_check(self) -> bool:
         """Verify the exporter has access to the event log."""
         return self._event_log is not None
 
     def export_successful_sessions(
-        self, output_dir: str | Path, criteria: dict[str, Any] | None = None
+        self, output_dir: str | Path, criteria: dict[str, Any] | None = None, delta: bool = False
     ) -> int:
         """Export all sessions meeting quality criteria to JSONL files.
 
         Args:
             output_dir: Directory to write JSONL files.
             criteria: Optional filters (e.g., {"app_type": "crud", "max_turns": 20}).
+            delta: If True, only export sessions modified since last export.
 
         Returns:
             Number of sessions exported.
@@ -68,11 +74,12 @@ class DataExporter(EventDrivenPlugin):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
+        last_export = self._load_last_export_timestamp() if delta else None
         criteria = criteria or {}
         count = 0
         export_rows: list[dict[str, Any]] = []
 
-        for session_id, metadata, events in self._iter_sessions():
+        for session_id, metadata, events in self._iter_sessions(delta=delta, last_export=last_export):
             if not self._has_required_criteria(session_id, metadata):
                 continue
             if not self._meets_quality_filters(session_id, metadata, criteria, events):
@@ -91,7 +98,67 @@ class DataExporter(EventDrivenPlugin):
                 for row in export_rows:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+        if delta and export_rows:
+            self._save_last_export_timestamp()
+
         return count
+
+    def _load_last_export_timestamp(self) -> datetime | None:
+        """Load the last export timestamp from state file."""
+        if self._state_file is None or not self._state_file.exists():
+            return None
+        try:
+            data = json.loads(self._state_file.read_text(encoding="utf-8"))
+            ts = data.get("last_export_timestamp")
+            if ts:
+                return datetime.fromisoformat(ts)
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+        return None
+
+    def _save_last_export_timestamp(self) -> None:
+        """Save the current timestamp as the last export timestamp."""
+        if self._state_file is None:
+            return
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "last_export_timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            self._state_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _iter_sessions(self, delta: bool = False, last_export: datetime | None = None) -> Iterator[tuple[str, dict[str, Any] | None, list[Event]]]:
+        """Iterate over all sessions, yielding (session_id, metadata, events)."""
+        if self._event_log is None:
+            return
+
+        rows = self._event_log.query(
+            "SELECT DISTINCT session_id FROM events ORDER BY session_id"
+        )
+        for row in rows:
+            session_id = row[0]
+            if delta and last_export is not None:
+                latest_ts = self._get_latest_event_timestamp(session_id)
+                if latest_ts is None or latest_ts <= last_export:
+                    continue
+            metadata = self._get_session_metadata(session_id)
+            events = self._event_log.get_session_events(session_id)
+            yield session_id, metadata, events
+
+    def _get_latest_event_timestamp(self, session_id: str) -> datetime | None:
+        """Get the latest event timestamp for a session."""
+        rows = self._event_log.query(
+            "SELECT timestamp FROM events WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (session_id,),
+        )
+        if not rows:
+            return None
+        try:
+            return datetime.fromisoformat(rows[0][0].replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
 
     def _has_required_criteria(self, session_id: str, metadata: dict[str, Any] | None) -> bool:
         """Check if a session has a recorded outcome event."""
@@ -137,20 +204,6 @@ class DataExporter(EventDrivenPlugin):
                 return False
 
         return True
-
-    def _iter_sessions(self) -> Iterator[tuple[str, dict[str, Any] | None, list[Event]]]:
-        """Iterate over all sessions, yielding (session_id, metadata, events)."""
-        if self._event_log is None:
-            return
-
-        rows = self._event_log.query(
-            "SELECT DISTINCT session_id FROM events ORDER BY session_id"
-        )
-        for row in rows:
-            session_id = row[0]
-            metadata = self._get_session_metadata(session_id)
-            events = self._event_log.get_session_events(session_id)
-            yield session_id, metadata, events
 
     def _get_session_metadata(self, session_id: str) -> dict[str, Any] | None:
         """Retrieve the session.outcome event metadata."""
@@ -204,6 +257,38 @@ class DataExporter(EventDrivenPlugin):
             "trajectory": trajectory,
         }
 
+    def export_session_zip(self, session_id: str, output_path: str | Path) -> bool:
+        """Export one session to a ZIP file.
+
+        Contents:
+        - events.jsonl: raw durable events for the session
+        - metadata.json: session metadata summary
+        """
+        if self._event_log is None:
+            return False
+        import zipfile
+        events = self._event_log.get_session_events(session_id)
+        metadata = self._get_session_metadata(session_id)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                events_path = f"{session_id}/events.jsonl"
+                lines = []
+                for event in events:
+                    lines.append(json.dumps(event.to_dict(), ensure_ascii=False, default=str))
+                zf.writestr(events_path, "\n".join(lines))
+                meta_path = f"{session_id}/metadata.json"
+                meta = {
+                    "session_id": session_id,
+                    "event_count": len(events),
+                    "metadata": metadata,
+                }
+                zf.writestr(meta_path, json.dumps(meta, ensure_ascii=False, default=str, indent=2))
+            return True
+        except (OSError, zipfile.BadZipFile):
+            return False
+
     def reset_run_state(self) -> None:
         """Reset any per-run state (for zero-drag invariant)."""
         self._run_state = {}
@@ -232,3 +317,4 @@ class DataExporter(EventDrivenPlugin):
             return None
         events = self._event_log.get_session_events(session_id)
         return self._export_session(session_id, events)
+

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .events import Event
 
@@ -19,9 +21,33 @@ class EventLog:
         self._conn.commit()
 
     def append(self, event: Event) -> int:
+        prev_hash = self._last_entry_hash(event.session_id)
+        entry_data = {
+            "timestamp": event.timestamp,
+            "type": event.type,
+            "session_id": event.session_id,
+            "task_id": event.task_id,
+            "parent_event_id": event.parent_event_id,
+            "operation_id": event.operation_id,
+            "payload": event.payload,
+            "prev_hash": prev_hash,
+        }
+        entry_hash = hashlib.sha256(
+            json.dumps(entry_data, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
         cur = self._conn.execute(
-            "INSERT INTO events (timestamp, type, session_id, task_id, parent_event_id, operation_id, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (event.timestamp, event.type, event.session_id, event.task_id, event.parent_event_id, event.operation_id, json.dumps(event.payload, ensure_ascii=False)),
+            "INSERT INTO events (timestamp, type, session_id, task_id, parent_event_id, operation_id, payload, prev_hash, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event.timestamp,
+                event.type,
+                event.session_id,
+                event.task_id,
+                event.parent_event_id,
+                event.operation_id,
+                json.dumps(event.payload, ensure_ascii=False),
+                prev_hash,
+                entry_hash,
+            ),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -87,6 +113,52 @@ class EventLog:
 
     def get_events_after(self, session_id: str, version: int) -> list[Event]:
         return self._rows("SELECT * FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC", (session_id, version))
+
+    def _last_entry_hash(self, session_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT entry_hash FROM events WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        return row[0] if row else None
+
+    def verify_chain(self, session_id: str) -> dict[str, Any]:
+        events = self.get_session_events(session_id)
+        expected_prev = None
+        broken: list[dict[str, Any]] = []
+        for event in events:
+            if event.prev_hash != expected_prev:
+                broken.append({
+                    "event_id": event.id,
+                    "expected_prev": expected_prev,
+                    "actual_prev": event.prev_hash,
+                })
+            entry_data = {
+                "timestamp": event.timestamp,
+                "type": event.type,
+                "session_id": event.session_id,
+                "task_id": event.task_id,
+                "parent_event_id": event.parent_event_id,
+                "operation_id": event.operation_id,
+                "payload": event.payload,
+                "prev_hash": event.prev_hash,
+            }
+            expected_hash = hashlib.sha256(
+                json.dumps(entry_data, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+            ).hexdigest()
+            if event.entry_hash != expected_hash:
+                broken.append({
+                    "event_id": event.id,
+                    "expected_hash": expected_hash,
+                    "actual_hash": event.entry_hash,
+                })
+            expected_prev = event.entry_hash
+        return {
+            "session_id": session_id,
+            "event_count": len(events),
+            "broken_links": len(broken),
+            "details": broken,
+            "valid": len(broken) == 0,
+        }
 
     def mark_session_outcome(self, session_id: str, outcome: str, metadata: dict[str, Any] | None = None) -> int:
         """Record the outcome of a session for training data collection.
@@ -175,7 +247,8 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     type TEXT NOT NULL, session_id TEXT NOT NULL, task_id TEXT,
-    parent_event_id INTEGER, operation_id TEXT, payload TEXT NOT NULL
+    parent_event_id INTEGER, operation_id TEXT, payload TEXT NOT NULL,
+    prev_hash TEXT, entry_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS snapshots (
     stream_id TEXT PRIMARY KEY, version INTEGER NOT NULL, state TEXT NOT NULL,
