@@ -57,6 +57,7 @@ from plugins.model.embedding import EmbeddingModel
 from plugins.parsers.tool_call_parser import OllamaToolCallParser
 from plugins.tools.file import FileTools
 from plugins.tools.asgi_wsgi_tester import ASGIWSGITester
+from plugins.tools.run_command import RunCommand
 from plugins.ui.terminal import TerminalUI
 
 
@@ -148,6 +149,10 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
     reg.register(DataExporter())
     reg.register(TerminalUI())
     reg.register(WebDashboard())
+    # Lightweight metrics (zero-token, event-driven) — safe for lite
+    reg.register(MetricsPlugin())
+    # Sandboxed command execution (zero-token, cwd-restricted)
+    reg.register(RunCommand(workspace=workspace))
 
     if profile == "full":
         # Observability / extended memory — only in full
@@ -155,7 +160,6 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         # Semantic router gated: only enabled if flag set
         reg.register(SemanticRouter(enabled=enable_semantic_router))
         reg.register(HealthMonitoringPlugin())
-        reg.register(MetricsPlugin())
         reg.register(LintingPlugin())
         reg.register(IntentRouterPlugin())
         reg.register(LogicLayerPlugin())
@@ -180,8 +184,8 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         # Semantic router not registered in lite at all — zero embedding cost
         pass
 
-    expected_lite = 29
-    expected_full = 52
+    expected_lite = 31
+    expected_full = 53
     actual = len(ctx.plugins)
     if profile == "lite":
         assert actual == expected_lite, f"Lite profile: expected {expected_lite} plugins, got {actual}"
@@ -198,6 +202,8 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         assert "decision_logger" in ctx.plugins, "DecisionLogger should be registered in lite"
         assert "web_dashboard" in ctx.plugins, "WebDashboard should be registered in lite"
         assert "tool_result_pruner" in ctx.plugins, "ToolResultPruner should be registered in lite"
+        assert "metrics" in ctx.plugins, "MetricsPlugin should be registered in lite"
+        assert "run_command" in ctx.plugins, "RunCommand should be registered in lite"
     elif profile == "full":
         assert actual == expected_full, f"Full profile: expected {expected_full}plugins, got {actual}"
         assert "schema_router" in ctx.plugins, "SchemaRouter should be registered in full"
@@ -210,6 +216,8 @@ def build_application(workspace: Path, model_name: str, ollama_url: str, db_path
         assert "decision_logger" in ctx.plugins, "DecisionLogger should be registered in full"
         assert "web_dashboard" in ctx.plugins, "WebDashboard should be registered in full"
         assert "tool_result_pruner" in ctx.plugins, "ToolResultPruner should be registered in full"
+        assert "metrics" in ctx.plugins, "MetricsPlugin should be registered in full"
+        assert "run_command" in ctx.plugins, "RunCommand should be registered in full"
         if enable_semantic_router:
             assert ctx.plugins["semantic_router"].enabled is True, "SemanticRouter should be enabled"
         else:

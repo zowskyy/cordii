@@ -109,3 +109,27 @@ def test_non_protected_file_writable(files):
     files.write_file("normal.txt", "data")
     files.write_file("normal.txt", "updated")
     assert (files.workspace / "normal.txt").read_text(encoding="utf-8") == "updated"
+
+
+def test_search_files_basic(files):
+    files.write_file("a.py", "print(1)")
+    files.write_file("b.txt", "hello")
+    files.write_file("c.py", "print(2)")
+    assert files.search_files("*.py") == ["a.py", "c.py"]
+
+
+def test_search_files_recursive(files):
+    files.write_file("root.txt", "root")
+    files.write_file("sub/inner.py", "x")
+    assert files.search_files("*.py") == ["sub/inner.py"]
+
+
+def test_search_files_no_matches(files):
+    files.write_file("a.txt", "hello")
+    assert files.search_files("*.py") == []
+
+
+def test_search_files_from_subdir(files):
+    files.write_file("top.py", "1")
+    files.write_file("sub/bottom.py", "2")
+    assert files.search_files("*.py", path="sub") == ["bottom.py"]

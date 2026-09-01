@@ -170,6 +170,24 @@ class FileTools(Plugin):
         except json.JSONDecodeError as exc:
             raise ToolError(f"Invalid JSON in {path}: {exc}") from exc
 
+    def search_files(self, pattern: str, path: str = ".") -> list[str]:
+        """Find files in the workspace matching a glob pattern.
+
+        Args:
+            pattern: Glob pattern, e.g. ``*.py`` or ``**/*.json``.
+            path: Workspace-relative directory to search from; defaults to ``.``.
+
+        Returns:
+            Sorted list of matching file paths relative to ``path`` using forward slashes.
+        """
+        target = self._resolve(path)
+        if not target.is_dir():
+            raise ToolError(f"Directory does not exist: {path}")
+        try:
+            return sorted(str(p.relative_to(target)).replace("\\", "/") for p in target.rglob(pattern) if p.is_file())
+        except OSError as exc:
+            raise ToolError(f"Could not search {path}: {exc}") from exc
+
     def schemas(self) -> list[dict[str, Any]]:
         return [
             {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 text file inside the workspace.", "parameters": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}}}}},
@@ -177,6 +195,7 @@ class FileTools(Plugin):
             {"type": "function", "function": {"name": "delete_file", "description": "Delete a file from the workspace.", "parameters": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}}}}},
             {"type": "function", "function": {"name": "list_directory", "description": "List entries in a workspace-relative directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Workspace-relative directory path; defaults to '.'."}}}}},
             {"type": "function", "function": {"name": "read_json", "description": "Read and parse a JSON file inside the workspace.", "parameters": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "description": "Workspace-relative JSON file path."}}}}},
+            {"type": "function", "function": {"name": "search_files", "description": "Find files in the workspace matching a glob pattern.", "parameters": {"type": "object", "required": ["pattern"], "properties": {"pattern": {"type": "string", "description": "Glob pattern, e.g. *.py or **/*.json."}, "path": {"type": "string", "description": "Workspace-relative directory to search from; defaults to '.'."}}}}},
         ]
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
@@ -192,4 +211,6 @@ class FileTools(Plugin):
             return json.dumps(self.list_directory(str(arguments.get("path", "."))))
         if name == "read_json":
             return json.dumps(self.read_json(str(arguments["path"])), ensure_ascii=False, indent=2)
+        if name == "search_files":
+            return json.dumps(self.search_files(str(arguments["pattern"]), str(arguments.get("path", "."))))
         raise ToolError(f"Unknown file tool: {name}")

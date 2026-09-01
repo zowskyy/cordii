@@ -25,14 +25,27 @@ try:
     from fastapi import FastAPI, Request
     from fastapi.responses import HTMLResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
-    from sse_starlette.sse import EventSourceResponse
     _FASTAPI_AVAILABLE = True
+    try:
+        from sse_starlette.sse import EventSourceResponse
+        _SSE_AVAILABLE = True
+    except ImportError:  # pragma: no cover - optional dependency
+        _SSE_AVAILABLE = False
 except ImportError:  # pragma: no cover - optional dependency
     _FASTAPI_AVAILABLE = False
+    _SSE_AVAILABLE = False
 
 
 if _FASTAPI_AVAILABLE:
     api = FastAPI()
+    api.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+    @api.get("/")
+    async def root() -> HTMLResponse:
+        template_path = Path(__file__).parent / "templates" / "index.html"
+        if template_path.exists():
+            return HTMLResponse(template_path.read_text(encoding="utf-8"))
+        return HTMLResponse("<h1>Continuity Kernel Dashboard</h1><p>Template not found</p>", status_code=200)
 
     @api.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -92,6 +105,7 @@ class WebDashboard(Plugin):
         super().__init__()
         self._thread: Optional[threading.Thread] = None
         self._server: Any = None
+        self._uvicorn_server: Any = None
 
     def start(self) -> None:
         if not _FASTAPI_AVAILABLE:
@@ -107,17 +121,20 @@ class WebDashboard(Plugin):
 
     def stop(self) -> None:
         self._started = False
-        if self._server is not None:
+        if self._uvicorn_server is not None:
             try:
-                self._server.shutdown()
+                self._uvicorn_server.shutdown()
             except Exception:
                 pass
+            self._uvicorn_server = None
         self._server = None
         self._thread = None
 
     def _run(self) -> None:
         import uvicorn
-        uvicorn.run(self._server, host=self._HOST, port=self._PORT, log_level="warning")
+        config = uvicorn.Config(self._server, host=self._HOST, port=self._PORT, log_level="warning")
+        self._uvicorn_server = uvicorn.Server(config)
+        self._uvicorn_server.run()
 
     def list_sessions(self) -> list[dict[str, Any]]:
         event_logger = self.context.plugins.get("event_logger") if self.context else None
